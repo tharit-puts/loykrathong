@@ -8,7 +8,8 @@ import { NAME_MAX, WISH_MAX, type Decoration, type KrathongType, type NewKrathon
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: NewKrathong) => void;
+  /** บันทึกกระทง: ล้มเหลวให้ throw Error ที่มีข้อความสำหรับผู้ใช้ (ฟอร์มจะแสดงข้อความและไม่ปิด) */
+  onSubmit: (data: NewKrathong) => Promise<void>;
 }
 
 type Step = 1 | 2 | 3;
@@ -150,6 +151,9 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
   const [wish, setWish] = useState('');
   /** ผู้ใช้แก้คำอธิษฐานเองแล้ว → ไม่สุ่มทับอีก */
   const [wishEdited, setWishEdited] = useState(false);
+  /** กำลังบันทึกลงฐานข้อมูล / ข้อความเมื่อบันทึกไม่สำเร็จ */
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // เปิด/ปิด <dialog> และล้างค่าใหม่ทุกครั้งที่เปิด
   useEffect(() => {
@@ -162,6 +166,8 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
       setName('');
       setWish('');
       setWishEdited(false);
+      setSubmitting(false);
+      setSubmitError(null);
       d.showModal();
     }
     if (!open && d.open) d.close();
@@ -190,10 +196,19 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
   const w = wish.trim();
   const canSubmit = n.length > 0 && w.length > 0;
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!canSubmit) return;
-    onSubmit({ type, decorations, name: n, wish: w });
+    if (!canSubmit || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onSubmit({ type, decorations, name: n, wish: w });
+    } catch (err) {
+      // ไม่ปิดหน้าต่าง: ชื่อและคำอธิษฐานที่พิมพ์ไว้ยังอยู่ กดลองใหม่ได้เลย
+      setSubmitError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด กรุณาลองอีกครั้ง');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const inputBase = 'w-full bg-[rgba(8,52,88,0.55)] text-[16px] text-white placeholder:text-white/65';
@@ -339,7 +354,9 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
                       onChange={(e) => setName(e.target.value)}
                     />
                     <div className="mt-1 flex justify-between gap-3 px-2 text-[12px] text-white/85">
-                      <span id={nameHelpId}>* โปรดระบุชื่อของคุณ เช่น ชื่อจริง (ไม่ระบุนามสกุล), ชื่อเล่น หรือนามแฝง</span>
+                      <span id={nameHelpId}>
+                        * ใช้ชื่อเล่นหรือนามแฝงได้ (ไม่ต้องใส่นามสกุล) ทุกคนที่เข้าเว็บจะเห็นชื่อและคำอธิษฐานนี้
+                      </span>
                       <span className="shrink-0 tabular-nums">
                         {name.length}/{NAME_MAX}
                       </span>
@@ -380,12 +397,18 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
                   </ol>
                 </details>
 
+                {submitError && (
+                  <p role="alert" className="mx-auto w-full max-w-[460px] rounded-xl border border-[#ffd0d0] bg-[rgba(150,20,40,0.55)] px-4 py-2.5 text-center text-[14.5px]">
+                    บันทึกกระทงไม่สำเร็จ: {submitError}
+                  </p>
+                )}
+
                 <div className="mt-auto flex justify-center gap-3">
-                  <button type="button" className={backBtn} onClick={() => goTo(2)}>
+                  <button type="button" className={backBtn} onClick={() => goTo(2)} disabled={submitting}>
                     <span aria-hidden="true">‹</span> กลับไป
                   </button>
-                  <button type="submit" className={`${primaryBtn} px-7`} disabled={!canSubmit}>
-                    ลอยกระทงกันเลย
+                  <button type="submit" className={`${primaryBtn} px-7`} disabled={!canSubmit || submitting} aria-busy={submitting}>
+                    {submitting ? 'กำลังลอยกระทง…' : 'ลอยกระทงกันเลย'}
                   </button>
                 </div>
               </form>

@@ -12,15 +12,16 @@ import { useKrathongs } from './hooks/useKrathongs';
 import type { ModalName, NewKrathong } from './types';
 
 export default function App() {
-  const { all, count, latestId, addKrathong } = useKrathongs();
+  const { all, count, loadError, latestId, addKrathong, refresh } = useKrathongs();
   const [modal, setModal] = useState<ModalName>(null);
   /** ความสูงของฉากหลัง (px) = ตำแหน่งร่องคลื่นแรกของแม่น้ำ */
   const [sceneBottom, setSceneBottom] = useState<number | null>(null);
 
   const closeModal = useCallback(() => setModal(null), []);
 
-  const handleCreate = (data: NewKrathong) => {
-    addKrathong(data);
+  /** บันทึกสำเร็จแล้วค่อยปิดหน้าต่าง (ล้มเหลว → error ส่งกลับไปให้ฟอร์มแสดง) */
+  const handleCreate = async (data: NewKrathong) => {
+    await addKrathong(data);
     setModal(null);
   };
 
@@ -53,11 +54,28 @@ export default function App() {
           />
           <Hero count={count} onCreate={() => setModal('create')} />
           <River krathongs={all} latestId={latestId} onSceneBottom={setSceneBottom} />
+
+          {/* เชื่อมต่อฐานข้อมูลไม่ได้: แจ้งแบบสุภาพ หน้าเว็บยังใช้ได้ (แม่น้ำแสดงกระทงตัวอย่าง) */}
+          {loadError && (
+            <div
+              role="status"
+              className="absolute inset-x-0 top-2 z-30 mx-auto flex w-fit max-w-[calc(100vw-24px)] items-center gap-3 rounded-full border border-white/30 bg-[rgba(20,25,60,0.92)] py-1.5 pr-1.5 pl-4 text-[14px] text-ink shadow-lg backdrop-blur-md"
+            >
+              <span>{loadError}</span>
+              <button
+                type="button"
+                onClick={refresh}
+                className="min-h-9 shrink-0 rounded-full border border-gold px-3 font-head text-gold2 hover:bg-white/10"
+              >
+                ลองใหม่
+              </button>
+            </div>
+          )}
         </main>
       </div>
 
       <CreateKrathongWizard open={modal === 'create'} onClose={closeModal} onSubmit={handleCreate} />
-      <WishesModal open={modal === 'wishes'} onClose={closeModal} krathongs={all} />
+      <WishesModal open={modal === 'wishes'} onClose={closeModal} />
       {/* popup ต้อนรับ: ขึ้นเฉพาะครั้งแรกที่เข้าเว็บ */}
       <WelcomePopup />
     </>

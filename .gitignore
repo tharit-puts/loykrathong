@@ -2,3 +2,8 @@ node_modules
 dist
 *.tsbuildinfo
 .DS_Store
+
+# ค่าลับ/ค่าเฉพาะเครื่อง (ห้าม commit) — .env.example เป็น template ที่ commit ได้
+.env
+.env.local
+.env.*.local

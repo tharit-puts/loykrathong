@@ -3,7 +3,8 @@ import KrathongIcon from './KrathongIcon';
 import { cta } from './ui';
 
 interface Props {
-  count: number;
+  /** null = ยังโหลดไม่ได้ (แสดง –) */
+  count: number | null;
   onCreate: () => void;
 }
 
@@ -36,7 +37,7 @@ export default function Hero({ count, onCreate }: Props) {
             <p className="flex items-center gap-2 font-head text-[18px] leading-none whitespace-nowrap text-[#fff7e0]">
               ทั้งหมด
               <b className="flex items-center text-[clamp(26px,4vw,32px)] font-semibold text-gold2 [text-shadow:0_0_10px_rgba(255,214,102,0.8),0_2px_0_rgba(0,0,0,0.3)]">
-                {count.toLocaleString('th-TH')}
+                {count === null ? '–' : count.toLocaleString('th-TH')}
               </b>
               ใบ
             </p>

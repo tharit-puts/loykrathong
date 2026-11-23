@@ -1,69 +1,102 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SAMPLE_KRATHONGS } from '../data/samples';
 import { MAX_VISIBLE, pickLanding } from '../lib/riverLayout';
-import { KRATHONG_LABELS, type Krathong, type KrathongType, type NewKrathong } from '../types';
+import { createKrathong, fetchKrathongs, friendlyError, getKrathongCount } from '../services/krathongs';
+import type { Krathong, NewKrathong } from '../types';
 
-const STORAGE_KEY = 'lk-krathongs-2569';
+/** ดึงกระทงใหม่จากคนอื่นทุกกี่มิลลิวินาที (เฉพาะตอนแท็บเปิดดูอยู่) */
+const REFRESH_MS = 60_000;
 
-/**
- * แปลงข้อมูลเก่าใน localStorage ให้เข้ากับรูปแบบปัจจุบัน
- * - กระทงดอกบัว (เลิกใช้แล้ว) และแบบที่ไม่รู้จัก → ใบตอง
- * - กระทงรุ่นก่อนไม่มีของตกแต่ง แต่ภาพเดิมมีดอกไม้อยู่บนกระทง → ใส่ดอกไม้ให้ หน้าตาจะได้ใกล้เดิม
- */
-function migrate(raw: Partial<Krathong> & { type?: string }): Krathong {
-  const type: KrathongType = raw.type && raw.type in KRATHONG_LABELS ? (raw.type as KrathongType) : 'leaf';
-  return {
-    ...(raw as Krathong),
-    type,
-    decorations: Array.isArray(raw.decorations) ? raw.decorations : ['flowers'],
-  };
-}
-
-function load(): Krathong[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.map(migrate) : [];
-  } catch {
-    return [];
-  }
-}
+type Status = 'loading' | 'ready' | 'error';
 
 /**
- * เก็บกระทงที่ผู้ใช้สร้างไว้ใน localStorage
- * (ถ้าต้องการให้ทุกคนเห็นกระทงของกันและกัน ให้เปลี่ยนส่วนนี้ไปเรียก API หลังบ้าน)
+ * กระทงบนแม่น้ำ + จำนวนทั้งหมด จาก Supabase
+ * - แม่น้ำแสดงกระทงใหม่สุด MAX_VISIBLE ใบ / ตัวนับนับจากฐานข้อมูลจริงเท่านั้น
+ * - ฐานข้อมูลยังว่าง (หรือเชื่อมต่อไม่ได้) → แม่น้ำแสดงกระทงตัวอย่างแทน ไม่ให้โล่ง
+ * - กระทงที่เพิ่งสร้างในเครื่องนี้ ใช้เวลาของเครื่องนี้เป็น createdAt (ไม่ใช่เวลาเซิร์ฟเวอร์)
+ *   แอนิเมชันตกลงน้ำและระยะห่างที่ pickLanding คำนวณไว้จึงตรงเสมอ แม้นาฬิกาเครื่องจะคลาดจากเซิร์ฟเวอร์
  */
 export function useKrathongs() {
-  const [mine, setMine] = useState<Krathong[]>(load);
+  const [recent, setRecent] = useState<Krathong[]>([]);
+  const [count, setCount] = useState<number | null>(null);
+  const [status, setStatus] = useState<Status>('loading');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [latestId, setLatestId] = useState<string | null>(null);
+  /** กระทงที่สร้างจากเครื่องนี้ (id → ข้อมูลที่ใช้เวลาเครื่องนี้) ใช้แทนแถวจากฐานข้อมูลเวลาดึงใหม่ */
+  const mineRef = useRef(new Map<string, Krathong>());
+  /** เคยโหลดจากฐานข้อมูลสำเร็จแล้วอย่างน้อยครั้งหนึ่ง */
+  const loadedOnce = useRef(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [rows, total] = await Promise.all([fetchKrathongs({ limit: MAX_VISIBLE }), getKrathongCount()]);
+      // ฐานข้อมูลเรียงใหม่สุดก่อน แต่แม่น้ำต้องการเก่า → ใหม่ (ใบท้ายสุด = ใหม่สุด)
+      setRecent(rows.reverse().map((k) => mineRef.current.get(k.id) ?? k));
+      setCount(total);
+      setStatus('ready');
+      setLoadError(null);
+      loadedOnce.current = true;
+    } catch (err) {
+      const message = friendlyError(err);
+      // ดึงรอบถัดๆ ไปไม่สำเร็จ (เคยโหลดได้แล้ว): แสดงข้อมูลเดิมต่อไปเงียบๆ ไม่ขึ้นแถบ error
+      if (loadedOnce.current) return;
+      setStatus('error');
+      setLoadError(message);
+    }
+  }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(mine));
-    } catch {
-      /* storage ใช้ไม่ได้ ก็ทำงานต่อแบบไม่บันทึก */
-    }
-  }, [mine]);
+    refresh();
+    const tick = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    const timer = window.setInterval(tick, REFRESH_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [refresh]);
 
-  const all = useMemo(() => [...SAMPLE_KRATHONGS, ...mine], [mine]);
+  const showSamples = status === 'error' || (status === 'ready' && recent.length === 0);
+  const all = useMemo(() => (showSamples ? SAMPLE_KRATHONGS : recent), [showSamples, recent]);
   const allRef = useRef(all);
   allRef.current = all;
 
-  const addKrathong = useCallback((data: NewKrathong) => {
+  /**
+   * บันทึกกระทงใหม่ลงฐานข้อมูล แล้วค่อยใส่ลงแม่น้ำ
+   * ล้มเหลว → throw ข้อความสุภาพ (ฟอร์มแสดงข้อความและไม่ปิด ผู้ใช้ไม่เสียคำอธิษฐานที่พิมพ์ไว้)
+   */
+  const addKrathong = useCallback(async (data: NewKrathong) => {
     const now = Date.now();
     // สุ่มแถว บน/กลาง/ล่าง และจุดตกรอบกลางจอ โดยเว้นระยะจากกระทงที่ลอยอยู่ในแถวเดียวกัน ไม่ให้ซ้อนกันมากเกินไป
     // (แม่น้ำกว้างเต็มจอ จึงใช้ความกว้างหน้าต่างแทนความกว้างแม่น้ำ)
     const onRiver = allRef.current.slice(-(MAX_VISIBLE - 1));
-    const k: Krathong = {
-      ...data,
-      id: `${now}-${Math.random().toString(36).slice(2, 7)}`,
-      createdAt: now,
-      ...pickLanding(onRiver, now, window.innerWidth),
-    };
-    setMine((prev) => [...prev, k]);
+    const { lane, x } = pickLanding(onRiver, now, window.innerWidth);
+
+    let saved: Krathong;
+    try {
+      saved = await createKrathong({
+        name: data.name,
+        wish: data.wish,
+        krathongType: data.type,
+        decorations: data.decorations,
+        lane,
+        landingX: x,
+      });
+    } catch (err) {
+      throw new Error(friendlyError(err));
+    }
+
+    const k: Krathong = { ...saved, createdAt: now };
+    mineRef.current.set(k.id, k);
+    setRecent((prev) => [...prev.filter((p) => p.id !== k.id), k].slice(-MAX_VISIBLE));
+    setCount((c) => (c ?? 0) + 1);
+    setStatus('ready');
+    setLoadError(null);
     setLatestId(k.id);
     return k;
   }, []);
 
-  return { all, count: all.length, latestId, addKrathong };
+  return { all, count, status, loadError, latestId, addKrathong, refresh };
 }
