@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+/* มือถือแนวตั้ง (จอกว้างไม่ถึง md = 768px): ใช้เป็น mobile-portrait:... เช่น popup ต้อนรับสลับเป็นภาพแนวตั้ง */
+@custom-variant mobile-portrait (@media (max-width: 767.98px) and (orientation: portrait));
+
 /* โทนสี ฟอนต์ และแอนิเมชันของเว็บ → ใช้เป็นคลาส เช่น bg-bg2, text-gold2, font-head, animate-bob */
 @theme {
   --color-bg: #0b1534;

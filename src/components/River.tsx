@@ -133,7 +133,8 @@ export default function River({ krathongs, latestId, maxVisible = MAX_VISIBLE, o
   return (
     <section
       // overflow-x-clip: ตัดคลื่นที่ยื่นเกินจอซ้ายขวา แต่ให้กระทงแถวบนโผล่พ้นขอบบนแม่น้ำได้
-      className="relative -mt-[clamp(32px,5vw,72px)] min-h-0 flex-1 overflow-x-clip"
+      // มือถือแนวตั้ง: สูง 43% ของจอ (หดได้ถ้า Hero ยาวกว่าที่เหลือ) ให้ Hero กินพื้นที่ที่เหลือ → จำนวนกระทง/ปุ่มไปอยู่เหนือแม่น้ำ
+      className="relative -mt-[clamp(32px,5vw,72px)] min-h-0 flex-1 overflow-x-clip mobile-portrait:flex-[0_1_43dvh]"
       aria-label="สายน้ำที่มีกระทงลอยอยู่"
     >
       {/* ตัวแม่น้ำ: มือถือสูงไม่เกิน 43% ของจอ ชิดล่าง ให้เห็นฉากเมืองมากขึ้น (จอเตี้ยก็ใช้เต็มพื้นที่เหมือนเดิม) */}
