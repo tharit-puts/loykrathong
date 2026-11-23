@@ -125,6 +125,37 @@ const cnt = await sb.from('krathongs').select('id', { count: 'exact', head: true
 (cnt.error || typeof cnt.count !== 'number' ? fail : pass)(`count (head) → ${cnt.error ? cnt.error.message : cnt.count}`);
 
 // ---------------------------------------------------------------------------
+console.log('\n4b) เด็กเก็บเหรียญ: ผู้ใช้เว็บสั่งเก็บ/แก้สถานะเหรียญเองไม่ได้ (ต้องรัน migration coin_collector ก่อน)');
+{
+  const col = await sb.from('krathongs').select('id, coin_collected_at').limit(1);
+  (col.error ? fail : pass)(`อ่านคอลัมน์ coin_collected_at ได้ → ${col.error ? `${col.error.code} ${col.error.message} (ยังไม่ได้รัน migration?)` : 'ok'}`);
+
+  const rpc = await sb.rpc('collect_one_coin');
+  (rpc.error ? pass : fail)(`anon เรียก collect_one_coin → ${rpc.error ? `ปฏิเสธ (${rpc.error.code})` : `ทำงานได้! ${JSON.stringify(rpc.data)}`}`);
+  const rpcRest = await fetch(`${url}/rest/v1/rpc/collect_one_coin`, {
+    method: 'POST',
+    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  (!rpcRest.ok ? pass : fail)(`anon เรียก collect_one_coin ผ่าน REST ตรง → HTTP ${rpcRest.status}`);
+
+  const ins = await sb
+    .from('krathongs')
+    .insert({ name: 'ทดสอบผิด', wish: 'x', krathong_type: 'ice', decorations: ['coin10'], coin_collected_at: new Date().toISOString() })
+    .select('id');
+  (ins.error ? pass : fail)(`สร้างกระทงพร้อมตั้ง coin_collected_at เอง → ${ins.error ? `ปฏิเสธ (${ins.error.code})` : 'บันทึกได้!'}`);
+
+  const target = created.find((r) => r.decorations.includes('coin10'));
+  if (target) {
+    const upd = await sb.from('krathongs').update({ coin_collected_at: new Date().toISOString() }).eq('id', target.id).select('id');
+    (upd.error || !upd.data?.length ? pass : fail)(`UPDATE coin_collected_at → ${upd.error ? `ปฏิเสธ (${upd.error.code})` : `${upd.data.length} แถว`}`);
+  }
+
+  const state = await sb.from('coin_collector_state').select('*');
+  (state.error || !state.data?.length ? pass : fail)(`อ่าน coin_collector_state → ${state.error ? `ปฏิเสธ (${state.error.code})` : `${state.data.length} แถว`}`);
+}
+
+// ---------------------------------------------------------------------------
 console.log('\n5) key ผิดต้องได้ error (ไม่ใช่ข้อมูล)');
 const bad = createClient(url, 'not-a-real-key', { auth: { persistSession: false } });
 const badRes = await bad.from('krathongs').select('id').limit(1);

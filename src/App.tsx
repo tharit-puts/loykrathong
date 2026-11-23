@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import scene from './assets/bg/scene.webp';
 import sceneMobile from './assets/bg/scene-mobile.webp';
 import { MOBILE_PORTRAIT } from './lib/media';
@@ -12,8 +12,14 @@ import { useKrathongs } from './hooks/useKrathongs';
 import type { ModalName, NewKrathong } from './types';
 
 export default function App() {
-  const { all, count, loadError, latestId, addKrathong, refresh } = useKrathongs();
   const [modal, setModal] = useState<ModalName>(null);
+  // เด็กเก็บเหรียญไม่เล่นตอน modal สร้างกระทงเปิดอยู่ (เหรียญหายเงียบๆ แทน)
+  const modalRef = useRef(modal);
+  modalRef.current = modal;
+  const canAnimate = useCallback(() => modalRef.current !== 'create', []);
+  const { all, count, loadError, latestId, addKrathong, refresh, collecting, onKidBend, onKidFinish } = useKrathongs({
+    canAnimate,
+  });
   /** ความสูงของฉากหลัง (px) = ตำแหน่งร่องคลื่นแรกของแม่น้ำ */
   const [sceneBottom, setSceneBottom] = useState<number | null>(null);
 
@@ -53,7 +59,14 @@ export default function App() {
             style={sceneBottom ? { height: sceneBottom } : undefined}
           />
           <Hero count={count} onCreate={() => setModal('create')} />
-          <River krathongs={all} latestId={latestId} onSceneBottom={setSceneBottom} />
+          <River
+            krathongs={all}
+            latestId={latestId}
+            onSceneBottom={setSceneBottom}
+            collectingId={collecting?.id ?? null}
+            onKidBend={onKidBend}
+            onKidFinish={onKidFinish}
+          />
 
           {/* เชื่อมต่อฐานข้อมูลไม่ได้: แจ้งแบบสุภาพ หน้าเว็บยังใช้ได้ (แม่น้ำแสดงกระทงตัวอย่าง) */}
           {loadError && (

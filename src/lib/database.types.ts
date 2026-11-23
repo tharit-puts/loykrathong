@@ -20,6 +20,8 @@ export interface Database {
           decorations: DbDecoration[];
           lane: number | null;
           landing_x: number | null;
+          /** เวลาที่เด็กเก็บเหรียญ 10 ไป (ตั้งโดย collect_one_coin ฝั่ง server เท่านั้น) */
+          coin_collected_at: string | null;
         };
         /** anon สร้างได้เฉพาะคอลัมน์เหล่านี้ (id, created_at ฐานข้อมูลตั้งเอง) */
         Insert: {
@@ -36,6 +38,7 @@ export interface Database {
       };
     };
     Views: { [_ in never]: never };
+    /** collect_one_coin ไม่อยู่ในนี้: anon เรียกไม่ได้ (pg_cron เรียกฝั่ง server) */
     Functions: {
       krathong_decorations_valid: {
         Args: { decos: string[] };

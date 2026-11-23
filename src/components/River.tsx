@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
 import bridgeRail from '../assets/bg/bridge-rail.webp';
+import CoinKid from './CoinKid';
 import KrathongIcon from './KrathongIcon';
 import { LAYERS, WaveLayer } from './RiverWaves';
 import { LANE_WATERLINE, MAX_VISIBLE, lanePath, laneOf, pathPos, xOf } from '../lib/riverLayout';
@@ -12,6 +13,10 @@ interface Props {
   maxVisible?: number;
   /** แจ้งตำแหน่ง (px จากขอบบน <main>) ที่ฉากหลังควรจบ: ใต้ยอดคลื่นชั้นหลังพอดี */
   onSceneBottom?: (y: number) => void;
+  /** กระทงที่เด็กกำลังมาเก็บเหรียญ (null = ไม่มี) */
+  collectingId?: string | null;
+  onKidBend?: (id: string) => void;
+  onKidFinish?: (id: string) => void;
 }
 
 /** แนวน้ำอยู่ที่ 80% ของความสูงรูปกระทง (ดู KrathongIcon) */
@@ -78,7 +83,15 @@ function layout(k: Krathong, lane: Lane, box: Box, mountedAt: number): Layout {
   };
 }
 
-export default function River({ krathongs, latestId, maxVisible = MAX_VISIBLE, onSceneBottom }: Props) {
+export default function River({
+  krathongs,
+  latestId,
+  maxVisible = MAX_VISIBLE,
+  onSceneBottom,
+  collectingId = null,
+  onKidBend,
+  onKidFinish,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const onSceneBottomRef = useRef(onSceneBottom);
   onSceneBottomRef.current = onSceneBottom;
@@ -119,6 +132,12 @@ export default function River({ krathongs, latestId, maxVisible = MAX_VISIBLE, o
     return () => ro.disconnect();
   }, []);
 
+  /**
+   * เวลาที่เด็กเริ่มโผล่ (ต่อกระทง+ขนาดแม่น้ำ): กล่องเด็กเพิ่ง mount จึงต้องคิด animation-delay ใหม่จากเวลานี้
+   * ไม่งั้นจะเริ่มที่ตำแหน่งตอนกระทง mount ครั้งแรก แล้วหลุดจากกระทง
+   */
+  const kidStart = useRef<{ key: string; at: number } | null>(null);
+
   const visible = krathongs.slice(-maxVisible);
   const now = Date.now();
   const items = box
@@ -158,6 +177,7 @@ export default function River({ krathongs, latestId, maxVisible = MAX_VISIBLE, o
                   type="button"
                   aria-label={`กระทงของ ${k.name}`}
                   aria-describedby={`wish-${k.id}`}
+                  data-krathong-id={k.id}
                   className="absolute left-0 animate-drift cursor-pointer border-0 bg-transparent p-0"
                   style={{ ...l.float, top: l.top, width: l.width }}
                   onPointerEnter={(e) => e.pointerType === 'mouse' && showWish(k.id)}
@@ -178,6 +198,29 @@ export default function River({ krathongs, latestId, maxVisible = MAX_VISIBLE, o
                   </div>
                 </button>
               ))}
+
+            {/* เด็กเก็บเหรียญ: อยู่ชั้นเดียวกับกระทงแถวนี้ (หน้ากระทง หลังคลื่นแถวหน้า) ลอยไปพร้อมกระทง */}
+            {box &&
+              items
+                .filter((it) => it.lane === lane && it.k.id === collectingId)
+                .map(({ k, key }) => {
+                  if (kidStart.current?.key !== key) kidStart.current = { key, at: Date.now() };
+                  const kl = layout(k, lane as Lane, box, kidStart.current.at);
+                  return (
+                    <div
+                      key={`kid-${key}`}
+                      data-kid-for={k.id}
+                      className="pointer-events-none absolute left-0 animate-drift"
+                      style={{ ...kl.float, top: kl.top, width: kl.width, height: kl.iconH }}
+                    >
+                      <CoinKid
+                        krathongW={kl.width}
+                        onBend={() => onKidBend?.(k.id)}
+                        onFinish={() => onKidFinish?.(k.id)}
+                      />
+                    </div>
+                  );
+                })}
           </Fragment>
         ))}
 

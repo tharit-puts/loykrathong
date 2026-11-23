@@ -23,6 +23,13 @@ export interface Krathong extends NewKrathong {
   lane?: Lane;
   /** ตำแหน่งแนวนอนตอนตกลงน้ำ เป็นสัดส่วนความกว้างแม่น้ำ (0–1) */
   x?: number;
+  /** เด็กเก็บเหรียญ 10 ไปแล้ว (coin_collected_at มีค่า) → ไม่แสดงเหรียญ แต่ decorations ยังมี coin เพื่อทำสถิติ */
+  coinCollected?: boolean;
+}
+
+/** ของตกแต่งที่แสดงบนกระทง: ถ้าเหรียญถูกเก็บไปแล้วก็ไม่แสดงเหรียญ (holdCoin = ยังแสดงไว้ระหว่างรอเด็กก้มหยิบ) */
+export function shownDecorations(k: Pick<Krathong, 'decorations' | 'coinCollected'>, holdCoin = false): Decoration[] {
+  return k.coinCollected && !holdCoin ? k.decorations.filter((d) => d !== 'coin') : k.decorations;
 }
 
 export const KRATHONG_LABELS: Record<KrathongType, string> = {

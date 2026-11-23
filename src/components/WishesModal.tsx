@@ -3,7 +3,7 @@ import KrathongIcon from './KrathongIcon';
 import Modal from './Modal';
 import { SAMPLE_KRATHONGS } from '../data/samples';
 import { fetchKrathongs, friendlyError } from '../services/krathongs';
-import { KRATHONG_LABELS, type Krathong } from '../types';
+import { KRATHONG_LABELS, shownDecorations, type Krathong } from '../types';
 
 interface Props {
   open: boolean;
@@ -61,7 +61,7 @@ export default function WishesModal({ open, onClose }: Props) {
           <ul className="m-0 grid list-none gap-2.5 p-0">
             {list.map((k) => (
               <li key={k.id} className="flex gap-3 rounded-[14px] bg-bg2 p-3">
-                <KrathongIcon type={k.type} decorations={k.decorations} className="h-[47px] w-14 flex-none" />
+                <KrathongIcon type={k.type} decorations={shownDecorations(k)} className="h-[47px] w-14 flex-none" />
                 <div className="min-w-0 break-words">
                   <b className="font-head font-medium">{k.name}</b>
                   {k.sample && (

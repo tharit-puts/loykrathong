@@ -13,6 +13,8 @@
 | `.env.local` | ค่าจริงของคุณ (**ห้าม commit** ถูก ignore ไว้แล้ว) |
 | `src/lib/supabase.ts` | Supabase client ตัวเดียวของทั้งเว็บ |
 | `src/services/krathongs.ts` | `createKrathong`, `fetchKrathongs`, `getKrathongCount` |
+| `supabase/migrations/20261124_coin_collector.sql` | เด็กเก็บเหรียญ: คอลัมน์ `coin_collected_at`, ฟังก์ชัน `collect_one_coin`, pg_cron, Realtime (ดูข้อ 8) |
+| `supabase/tests/coin_collector_test.sql` | ทดสอบกติกาเก็บเหรียญแบบจำลองเวลา (รันใน SQL Editor) |
 | `scripts/test-supabase.mjs` | ทดสอบ schema + RLS ด้วย anon key (`npm run test:supabase`) |
 
 ตาราง `krathongs` เก็บ:
@@ -26,6 +28,7 @@
 | `krathong_type` | text | `banana_leaf` / `ice` / `bread` / `invisible` |
 | `decorations` | text[] | เฉพาะ `flowers` / `coin10` / `nail` ไม่ซ้ำ (ว่างได้) ธูปเทียนมีทุกใบ จึงไม่เก็บ |
 | `lane`, `landing_x` | smallint, real | แถวและจุดตกลงน้ำ ให้ทุกเครื่องเห็นกระทงตำแหน่งเดียวกัน |
+| `coin_collected_at` | timestamptz | เวลาที่เด็กเก็บเหรียญไป (server ตั้งเท่านั้น, ว่าง = ยังมีเหรียญ) ดูข้อ 8 |
 
 ความยาวชื่อ/คำอธิษฐานตรงกับช่องกรอกในเว็บ (`NAME_MAX`, `WISH_MAX` ใน `src/types.ts`) ถ้าแก้ฝั่งหนึ่งต้องแก้อีกฝั่งด้วย
 
@@ -148,6 +151,45 @@ delete from public.krathongs where name like 'ทดสอบ%';
 - อัปเดตค่าใหม่ใน `.env.local` และที่ hosting แล้ว deploy ใหม่
 
 ป้องกันไว้ก่อน: เปิด **Secret scanning / Push protection** ใน GitHub (Settings > Code security)
+
+---
+
+## 8) เด็กเก็บเหรียญ (pg_cron + Realtime)
+
+เด็กจะโผล่จากน้ำมาเก็บเหรียญ 10 จากกระทงที่มีเหรียญ **server เป็นคนตัดสิน** ผ่าน pg_cron แล้วทุกเครื่องที่เปิดเว็บอยู่เห็นพร้อมกันผ่าน Realtime
+
+กติกา (ตั้งค่าใน `public.collect_one_coin` ใน `supabase/migrations/20261124_coin_collector.sql`)
+
+- กระทงที่มีสิทธิ์: มีเหรียญ 10, ยังไม่ถูกเก็บ, สร้างมาแล้วอย่างน้อย 2 นาที (เวลา server)
+- cron รันทุก 1 นาที แต่บังคับ cooldown 110 วินาทีระหว่างรอบ จึงเก็บราวทุก 2 นาที (cooldown ไม่ตั้ง 120 พอดี กันรอบถูกข้ามเพราะเวลาคลาดเสี้ยววินาที)
+- แต่ละรอบสุ่มกระทงมีสิทธิ์ 1 ใบ และสุ่มโอกาส 70% ว่าเด็กจะมาเก็บหรือไม่ (ไม่มีกระทงมีสิทธิ์ = ไม่นับเป็นรอบ)
+- เก็บแล้วตั้ง `coin_collected_at` (ไม่ลบเหรียญออกจาก `decorations` เก็บไว้ทำสถิติ) ใบที่ถูกเก็บแล้วไม่ถูกเก็บซ้ำ
+- ผู้ใช้เว็บสั่งเก็บเองไม่ได้: ถอนสิทธิ์ execute ของฟังก์ชันจาก anon/authenticated และยังไม่มีสิทธิ์ UPDATE ตาราง
+
+### 8.1 ติดตั้ง
+
+1. **เปิด pg_cron:** Dashboard > **Integrations > Cron** > Enable (หรือ **Database > Extensions** ค้นหา `pg_cron` แล้วเปิด)
+   ถ้าข้ามขั้นนี้ migration จะพยายามเปิดให้เอง ถ้าไม่ผ่านค่อยเปิดจาก Dashboard แล้วรันใหม่
+2. **รัน migration:** SQL Editor > New query > วางทั้งไฟล์ `supabase/migrations/20261124_coin_collector.sql` > Run
+   (ต้องรัน `supabase/schema.sql` มาก่อนแล้ว / รันซ้ำได้)
+3. **เช็ค Realtime:** Dashboard > **Database > Publications** > `supabase_realtime` ต้องมีตาราง `krathongs`
+   (migration เพิ่มให้แล้ว หรือเปิดที่ Table Editor > `krathongs` > ปุ่ม Realtime)
+4. **เช็ค cron:** Integrations > Cron ต้องเห็นงาน `collect-one-coin` ตาราง `* * * * *` และในแท็บประวัติต้องเห็นรันทุกนาที
+   หรือ SQL: `select jobname, schedule, active from cron.job;`
+
+### 8.2 ทดสอบ
+
+- **ทดสอบกติกาแบบจำลองเวลา (ไม่ต้องรอจริง):** รัน `supabase/tests/coin_collector_test.sql` ใน SQL Editor
+  ผลจะขึ้นเป็น `ERROR: TEST REPORT ...` โดยตั้งใจ (เพื่อย้อนข้อมูลทดสอบทั้งหมด) ทุกบรรทัดต้องเป็น `PASS` และจบด้วย `ALL PASSED`
+- **ทดสอบสิทธิ์:** `npm run test:supabase` (หัวข้อ 4b: anon เรียกฟังก์ชัน/แก้ coin_collected_at ไม่ได้)
+- **ดูของจริง:** สร้างกระทงที่มีเหรียญ รอ 2–4 นาที (โอกาส 70% บางรอบเด็กจะไม่มา) แล้วดูในเว็บ
+  ดูประวัติการเก็บ: `select name, created_at, coin_collected_at from public.krathongs where coin_collected_at is not null order by coin_collected_at desc;`
+
+### 8.3 ปรับค่า / ปิดชั่วคราว
+
+- เปลี่ยนโอกาส/cooldown/อายุขั้นต่ำ: แก้ค่า default ของพารามิเตอร์ใน `collect_one_coin` แล้วรัน migration ใหม่
+- หยุดชั่วคราว: `select cron.unschedule('collect-one-coin');` (เปิดใหม่: รัน migration อีกครั้ง)
+- คืนเหรียญทั้งหมด (เช่น หลังทดสอบ): `update public.krathongs set coin_collected_at = null;`
 
 ---
 

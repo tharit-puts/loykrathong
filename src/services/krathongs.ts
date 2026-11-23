@@ -33,7 +33,7 @@ function db() {
   return getSupabase();
 }
 
-const COLUMNS = 'id, created_at, name, wish, krathong_type, decorations, lane, landing_x';
+const COLUMNS = 'id, created_at, name, wish, krathong_type, decorations, lane, landing_x, coin_collected_at';
 
 function fromRow(r: KrathongRow): Krathong {
   return {
@@ -46,6 +46,7 @@ function fromRow(r: KrathongRow): Krathong {
     decorations: (r.decorations ?? []).map((d) => DECO_FROM_DB[d]).filter(Boolean),
     lane: r.lane != null && r.lane >= 0 && r.lane <= 2 ? (r.lane as Lane) : undefined,
     x: r.landing_x ?? undefined,
+    coinCollected: r.coin_collected_at != null,
   };
 }
 
@@ -102,6 +103,30 @@ export async function getKrathongCount(): Promise<number> {
     .abortSignal(timeout());
   if (error) throw error;
   return count ?? 0;
+}
+
+/**
+ * ฟัง event เด็กเก็บเหรียญแบบ realtime (server ตั้ง coin_collected_at ผ่าน pg_cron)
+ * ทุกเครื่องที่เปิดเว็บอยู่ได้ event เดียวกันพร้อมกัน / คืนฟังก์ชันยกเลิกการฟัง
+ * ตั้งค่า env ไม่ครบหรือเชื่อมต่อไม่ได้ → ไม่ฟัง (เว็บยังใช้ได้ แค่ไม่มีเด็กโผล่) และ poll ปกติจะซ่อนเหรียญให้เอง
+ */
+export function subscribeCoinCollections(onCollected: (krathongId: string) => void): () => void {
+  let sb: ReturnType<typeof getSupabase>;
+  try {
+    sb = getSupabase();
+  } catch {
+    return () => {};
+  }
+  const channel = sb
+    .channel('krathongs-coin-collector')
+    .on<KrathongRow>('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'krathongs' }, (payload) => {
+      const row = payload.new as Partial<KrathongRow>;
+      if (row.id && row.coin_collected_at) onCollected(row.id);
+    })
+    .subscribe();
+  return () => {
+    sb.removeChannel(channel);
+  };
 }
 
 /** แปลง error ให้เป็นข้อความสุภาพสำหรับผู้ใช้ (รายละเอียดจริงพิมพ์ใน console สำหรับนักพัฒนา) */
