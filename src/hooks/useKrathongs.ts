@@ -1,17 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SAMPLE_KRATHONGS } from '../data/samples';
 import { MAX_VISIBLE, pickLanding } from '../lib/riverLayout';
+import { serverToLocal } from '../lib/serverClock';
 import {
   createKrathong,
   fetchKrathongs,
   friendlyError,
   getKrathongCount,
-  subscribeCoinCollections,
+  subscribeKrathongChanges,
 } from '../services/krathongs';
 import { shownDecorations, type Krathong, type NewKrathong } from '../types';
 
-/** ดึงกระทงใหม่จากคนอื่นทุกกี่มิลลิวินาที (เฉพาะตอนแท็บเปิดดูอยู่) */
-const REFRESH_MS = 60_000;
+/**
+ * ตัวสำรองเผื่อ realtime หลุด: ดึงรายการใหม่ซ้ำทุกกี่มิลลิวินาที (เฉพาะตอนแท็บเปิดดูอยู่)
+ * และดึงใหม่ทุกครั้งที่กลับมาที่แท็บ
+ */
+const REFRESH_MS = 30_000;
+/**
+ * กระทงที่เพิ่งเข้ามาในเครื่องนี้ (สร้างเอง / ได้จาก realtime) แต่ผลดึงรอบนั้นยังไม่มี
+ * (คำขอดึงออกไปก่อนบันทึกเสร็จ) ให้คงไว้บนแม่น้ำอย่างน้อยเท่านี้ ไม่ให้หายแล้วโผล่ใหม่
+ * พ้นเวลานี้แล้วถือตามฐานข้อมูล (เช่น ถูกลบจากหลังบ้าน)
+ */
+const PENDING_MS = 30_000;
 /** กันค้าง: ถ้าแอนิเมชันเด็กไม่จบภายในเวลานี้ (เช่น กระทงหลุดจากแม่น้ำระหว่างเล่น) ให้เลิกเล่นเอง */
 const KID_MAX_MS = 5_000;
 
@@ -34,6 +44,9 @@ interface Options {
  * - ฐานข้อมูลยังว่าง (หรือเชื่อมต่อไม่ได้) → แม่น้ำแสดงกระทงตัวอย่างแทน ไม่ให้โล่ง
  * - กระทงที่เพิ่งสร้างในเครื่องนี้ ใช้เวลาของเครื่องนี้เป็น createdAt (ไม่ใช่เวลาเซิร์ฟเวอร์)
  *   แอนิเมชันตกลงน้ำและระยะห่างที่ pickLanding คำนวณไว้จึงตรงเสมอ แม้นาฬิกาเครื่องจะคลาดจากเซิร์ฟเวอร์
+ * - กระทงใหม่ของคนอื่น: ได้จาก realtime (INSERT) ทันที ใช้แถว/จุดตกที่ผู้สร้างสุ่มไว้ และเวลา server
+ *   → ตกลงน้ำด้วยแอนิเมชันเดิม ทุกเครื่องเห็นตำแหน่ง/ระยะห่างเดียวกัน / กันซ้ำด้วย id ตัวนับไม่นับซ้ำ
+ * - realtime หลุด: ดึงซ้ำทุก 30 วินาที + ตอนกลับมาที่แท็บ แล้ว merge เข้ากับของเดิมโดยไม่ซ้ำ id
  * - เด็กเก็บเหรียญ: server ตัดสิน (pg_cron) แล้วส่ง event realtime มา
  *   กระทงอยู่บนแม่น้ำ + แท็บเปิดอยู่ + ไม่มี modal → เล่นแอนิเมชัน (เหรียญหายตอนเด็กก้มสุด)
  *   นอกนั้น → ซ่อนเหรียญเงียบๆ ไม่คิวไว้เล่นทีหลัง / ตอนโหลดหน้า ใบที่ถูกเก็บแล้วไม่มีเหรียญตั้งแต่แรก
@@ -45,8 +58,26 @@ export function useKrathongs({ canAnimate }: Options = {}) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [latestId, setLatestId] = useState<string | null>(null);
   const [collecting, setCollecting] = useState<Collecting | null>(null);
-  /** กระทงที่สร้างจากเครื่องนี้ (id → createdAt ของเครื่องนี้) ใช้แทนเวลาจากฐานข้อมูลเวลาดึงใหม่ */
-  const myCreatedAt = useRef(new Map<string, number>());
+  /**
+   * createdAt ตามนาฬิกาเครื่องนี้ของกระทงแต่ละใบ (id → ms) กำหนดครั้งเดียวตอนเห็นครั้งแรก แล้วใช้ค่าเดิมตลอด
+   * - สร้างเอง: เวลาเครื่องตอนสร้าง / จากฐานข้อมูลหรือ realtime: created_at แปลงเป็นเวลาเครื่อง (serverClock)
+   * ตำแหน่งบนแม่น้ำ แอนิเมชันตกลงน้ำ และระยะห่างจึงใช้นาฬิกาเดียวกันหมด แม้นาฬิกาเครื่องคลาดจาก server
+   * และไม่กระโดดเมื่อดึงข้อมูลรอบถัดไป
+   */
+  const localCreatedAt = useRef(new Map<string, number>());
+  const toLocalTime = (k: Krathong): Krathong => {
+    let t = localCreatedAt.current.get(k.id);
+    if (t === undefined) {
+      t = serverToLocal(k.createdAt);
+      localCreatedAt.current.set(k.id, t);
+    }
+    return t === k.createdAt ? k : { ...k, createdAt: t };
+  };
+  const toLocalTimeRef = useRef(toLocalTime);
+  /** id ที่นับรวมในตัวนับแล้ว (กันนับซ้ำเมื่อได้กระทงใบเดียวกันจากหลายทาง: สร้างเอง / realtime / ดึงซ้ำ) */
+  const countedIds = useRef(new Set<string>());
+  /** กระทงที่เพิ่งเข้ามาในเครื่องนี้ (id → เวลาที่เข้ามาตามนาฬิกาเครื่อง / created_at ตามเวลา server) ดู PENDING_MS */
+  const pendingSince = useRef(new Map<string, { at: number; serverCreatedAt: number }>());
   /** เคยโหลดจากฐานข้อมูลสำเร็จแล้วอย่างน้อยครั้งหนึ่ง */
   const loadedOnce = useRef(false);
 
@@ -60,14 +91,23 @@ export function useKrathongs({ canAnimate }: Options = {}) {
   const refresh = useCallback(async () => {
     try {
       const [rows, total] = await Promise.all([fetchKrathongs({ limit: MAX_VISIBLE }), getKrathongCount()]);
+      const newestFetched = rows.length ? Math.max(...rows.map((k) => k.createdAt)) : -Infinity;
       // ฐานข้อมูลเรียงใหม่สุดก่อน แต่แม่น้ำต้องการเก่า → ใหม่ (ใบท้ายสุด = ใหม่สุด)
-      setRecent(
-        rows.reverse().map((k) => {
-          const mine = myCreatedAt.current.get(k.id);
-          return mine === undefined ? k : { ...k, createdAt: mine };
-        }),
+      const fetched = rows.reverse().map(toLocalTimeRef.current);
+      const fetchedIds = new Set(fetched.map((k) => k.id));
+      // merge: ใบที่เพิ่งเข้ามาแต่ผลดึงรอบนี้ยังไม่มี → คงไว้ต่อท้าย (ใหม่สุด) ไม่ซ้ำ id
+      const now = Date.now();
+      for (const [id, p] of pendingSince.current) if (now - p.at > PENDING_MS) pendingSince.current.delete(id);
+      // นับเพิ่มเฉพาะใบที่ใหม่กว่าใบใหม่สุดที่ดึงมา (ใบที่เก่ากว่าแต่ไม่อยู่ในผลดึง = อยู่ในผลนับแล้ว แค่ล้นจาก MAX_VISIBLE)
+      const notYetFetched = [...pendingSince.current].filter(
+        ([id, p]) => !fetchedIds.has(id) && p.serverCreatedAt > newestFetched,
       );
-      setCount(total);
+      setRecent((prev) =>
+        [...fetched, ...prev.filter((k) => !fetchedIds.has(k.id) && pendingSince.current.has(k.id))].slice(-MAX_VISIBLE),
+      );
+      for (const id of fetchedIds) countedIds.current.add(id);
+      // ตัวนับจากฐานข้อมูล + ใบที่เพิ่งเข้ามาแต่ยังไม่ทันอยู่ในผลนับรอบนี้
+      setCount(total + notYetFetched.length);
       setStatus('ready');
       setLoadError(null);
       loadedOnce.current = true;
@@ -93,8 +133,20 @@ export function useKrathongs({ canAnimate }: Options = {}) {
     };
   }, [refresh]);
 
-  // event จาก server: เด็กเก็บเหรียญจากกระทงใบหนึ่ง
+  // event จาก server (realtime): กระทงใหม่ / เด็กเก็บเหรียญ — channel เดียว ถอดตอน unmount
   useEffect(() => {
+    const onInsert = (k: Krathong) => {
+      // ซ้ำ: อยู่บนแม่น้ำแล้ว หรือนับไปแล้ว (เช่น กระทงที่เครื่องนี้สร้างเอง ได้ลงน้ำจาก addKrathong แล้ว)
+      if (countedIds.current.has(k.id) || recentRef.current.some((p) => p.id === k.id)) return;
+      countedIds.current.add(k.id);
+      pendingSince.current.set(k.id, { at: Date.now(), serverCreatedAt: k.createdAt });
+      // ใช้แถว/จุดตกที่ผู้สร้างสุ่มไว้ (ไม่สุ่มใหม่ ระยะห่างจึงตรงกับทุกเครื่อง) / createdAt = เวลา server แปลงเป็นเวลาเครื่อง
+      // River เห็นว่าเพิ่งสร้าง (ไม่เกิน 2 วินาที) จึงเล่นแอนิเมชันตกลงน้ำแบบเดียวกับกระทงที่สร้างเอง
+      const local = toLocalTimeRef.current(k);
+      setRecent((prev) => [...prev.filter((p) => p.id !== k.id), local].slice(-MAX_VISIBLE));
+      setCount((c) => (c === null ? c : c + 1));
+    };
+
     const onCollected = (id: string) => {
       const target = recentRef.current.find((k) => k.id === id);
       // ไม่อยู่บนแม่น้ำ หรือถูกเก็บไปแล้วในเครื่องนี้ → ไม่ต้องทำอะไร (poll รอบหน้าจะได้ค่าล่าสุดเอง)
@@ -107,7 +159,7 @@ export function useKrathongs({ canAnimate }: Options = {}) {
     };
     // dev เท่านั้น (ตัดทิ้งตอน build): จำลอง event จาก server เพื่อทดสอบแอนิเมชันโดยไม่ต้องรอ cron
     if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__lkSimulateCoinCollected = onCollected;
-    return subscribeCoinCollections(onCollected);
+    return subscribeKrathongChanges({ onInsert, onCoinCollected: onCollected });
   }, []);
 
   // กันค้าง: เลิกเล่นเองถ้าเด็กไม่เรียก onFinish (เช่น กระทงหลุดจากแม่น้ำ / ย่อจอแล้ว remount)
@@ -166,9 +218,14 @@ export function useKrathongs({ canAnimate }: Options = {}) {
     }
 
     const k: Krathong = { ...saved, createdAt: now };
-    myCreatedAt.current.set(k.id, now);
+    localCreatedAt.current.set(k.id, now);
+    pendingSince.current.set(k.id, { at: Date.now(), serverCreatedAt: saved.createdAt });
     setRecent((prev) => [...prev.filter((p) => p.id !== k.id), k].slice(-MAX_VISIBLE));
-    setCount((c) => (c ?? 0) + 1);
+    // event realtime ของใบนี้อาจมาถึงก่อนบันทึกเสร็จ (นับไปแล้ว) → ไม่นับซ้ำ
+    if (!countedIds.current.has(k.id)) {
+      countedIds.current.add(k.id);
+      setCount((c) => (c ?? 0) + 1);
+    }
     setStatus('ready');
     setLoadError(null);
     setLatestId(k.id);

@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './database.types';
+import { recordHttpDate } from './serverClock';
 
 /**
  * Supabase client ตัวเดียวของทั้งเว็บ
@@ -35,6 +36,15 @@ export function getSupabase(): SupabaseClient<Database> {
   client = createClient<Database>(url!, anonKey!, {
     // เว็บนี้ไม่มีระบบล็อกอิน: ไม่ต้องเก็บ session
     auth: { persistSession: false, autoRefreshToken: false },
+    // ทุกคำตอบ: จด header Date ไว้ประมาณว่านาฬิกาเครื่องคลาดจาก server เท่าไร (ดู serverClock.ts)
+    global: {
+      fetch: async (input, init) => {
+        const sentAt = Date.now();
+        const res = await fetch(input, init);
+        recordHttpDate(sentAt, Date.now(), res.headers.get('date'));
+        return res;
+      },
+    },
   });
   return client;
 }

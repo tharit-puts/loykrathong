@@ -1,3 +1,4 @@
+import { recordCommitTimestamp } from '../lib/serverClock';
 import { getSupabase, SupabaseConfigError } from '../lib/supabase';
 import type { DbDecoration, DbKrathongType, KrathongRow } from '../lib/database.types';
 import type { Decoration, Krathong, KrathongType, Lane } from '../types';
@@ -105,12 +106,28 @@ export async function getKrathongCount(): Promise<number> {
   return count ?? 0;
 }
 
+export interface KrathongRealtimeHandlers {
+  /** มีกระทงใหม่ในฐานข้อมูล (ของใครก็ได้ รวมของเครื่องนี้เอง: ฝั่งที่รับต้องกันซ้ำด้วย id) */
+  onInsert: (krathong: Krathong) => void;
+  /** เด็กเก็บเหรียญจากกระทงใบนี้ (server ตั้ง coin_collected_at ผ่าน pg_cron) */
+  onCoinCollected: (krathongId: string) => void;
+}
+
+/** เลขกำกับชื่อ channel ให้ไม่ซ้ำกันในแต่ละครั้งที่ subscribe */
+let channelSeq = 0;
+
 /**
- * ฟัง event เด็กเก็บเหรียญแบบ realtime (server ตั้ง coin_collected_at ผ่าน pg_cron)
- * ทุกเครื่องที่เปิดเว็บอยู่ได้ event เดียวกันพร้อมกัน / คืนฟังก์ชันยกเลิกการฟัง
- * ตั้งค่า env ไม่ครบหรือเชื่อมต่อไม่ได้ → ไม่ฟัง (เว็บยังใช้ได้ แค่ไม่มีเด็กโผล่) และ poll ปกติจะซ่อนเหรียญให้เอง
+ * ฟังการเปลี่ยนแปลงของตาราง krathongs แบบ realtime ใน channel เดียว:
+ * INSERT = กระทงใหม่ของคนอื่น / UPDATE ที่มี coin_collected_at = เด็กเก็บเหรียญ
+ * ทุกเครื่องที่เปิดเว็บอยู่ได้ event เดียวกันพร้อมกัน / คืนฟังก์ชันยกเลิกการฟัง (removeChannel)
+ *
+ * ชื่อ channel ต้องไม่ซ้ำทุกครั้ง: supabase-js คืน channel เดิมถ้าชื่อซ้ำ และ removeChannel ถอดออกจากรายการ
+ * หลัง server ตอบกลับเท่านั้น → ใน React StrictMode (effect รัน-ล้าง-รันใหม่ทันที) จะได้ channel เก่าที่ subscribe
+ * ไปแล้วกลับมา แล้วเพิ่ม listener ไม่ได้
+ *
+ * ตั้งค่า env ไม่ครบ → ไม่ฟัง (เว็บยังใช้ได้) และการดึงข้อมูลซ้ำเป็นระยะจะตามข้อมูลให้เอง
  */
-export function subscribeCoinCollections(onCollected: (krathongId: string) => void): () => void {
+export function subscribeKrathongChanges({ onInsert, onCoinCollected }: KrathongRealtimeHandlers): () => void {
   let sb: ReturnType<typeof getSupabase>;
   try {
     sb = getSupabase();
@@ -118,10 +135,15 @@ export function subscribeCoinCollections(onCollected: (krathongId: string) => vo
     return () => {};
   }
   const channel = sb
-    .channel('krathongs-coin-collector')
+    .channel(`krathongs-realtime-${++channelSeq}-${Math.random().toString(36).slice(2, 8)}`)
+    .on<KrathongRow>('postgres_changes', { event: 'INSERT', schema: 'public', table: 'krathongs' }, (payload) => {
+      const row = payload.new as KrathongRow;
+      recordCommitTimestamp(payload.commit_timestamp);
+      if (row?.id) onInsert(fromRow(row));
+    })
     .on<KrathongRow>('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'krathongs' }, (payload) => {
       const row = payload.new as Partial<KrathongRow>;
-      if (row.id && row.coin_collected_at) onCollected(row.id);
+      if (row.id && row.coin_collected_at) onCoinCollected(row.id);
     })
     .subscribe();
   return () => {
