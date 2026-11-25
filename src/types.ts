@@ -17,8 +17,6 @@ export interface NewKrathong {
 export interface Krathong extends NewKrathong {
   id: string;
   createdAt: number;
-  /** กระทงตัวอย่างที่ติดมากับหน้าเว็บ */
-  sample?: boolean;
   /** แถวที่สุ่มได้ตอนสร้าง (กระทงเก่าที่ไม่มีค่านี้จะคำนวณจาก id แทน) */
   lane?: Lane;
   /** ตำแหน่งแนวนอนตอนตกลงน้ำ เป็นสัดส่วนความกว้างแม่น้ำ (0–1) */

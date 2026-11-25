@@ -36,10 +36,21 @@ export interface Database {
         Update: never;
         Relationships: [];
       };
+      /** ผลจับเจ้าแม่คงคา (มีได้แถวเดียว) anon อ่านได้อย่างเดียว */
+      lucky_draws: {
+        Row: { id: string; krathong_id: string; drawn_at: string };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     /** collect_one_coin ไม่อยู่ในนี้: anon เรียกไม่ได้ (pg_cron เรียกฝั่ง server) */
     Functions: {
+      get_lucky_draw_state: {
+        Args: Record<string, never>;
+        Returns: LuckyDrawStateJson;
+      };
       krathong_decorations_valid: {
         Args: { decos: string[] };
         Returns: boolean;
@@ -48,6 +59,20 @@ export interface Database {
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
   };
+}
+
+/** ผลของ get_lucky_draw_state() */
+export interface LuckyDrawStateJson {
+  server_now: string;
+  hold_seconds: number;
+  drawn_at: string | null;
+  krathong: {
+    id: string;
+    name: string;
+    krathong_type: DbKrathongType;
+    decorations: DbDecoration[];
+    coin_collected_at: string | null;
+  } | null;
 }
 
 export type KrathongRow = Database['public']['Tables']['krathongs']['Row'];

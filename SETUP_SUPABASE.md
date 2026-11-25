@@ -14,6 +14,9 @@
 | `src/lib/supabase.ts` | Supabase client ตัวเดียวของทั้งเว็บ |
 | `src/services/krathongs.ts` | `createKrathong`, `fetchKrathongs`, `getKrathongCount` |
 | `supabase/migrations/20261124_coin_collector.sql` | เด็กเก็บเหรียญ: คอลัมน์ `coin_collected_at`, ฟังก์ชัน `collect_one_coin`, pg_cron, Realtime (ดูข้อ 8) |
+| `supabase/migrations/20261126_coin_collector_v2.sql` | เด็กเก็บเหรียญ v2: ตาราง config (20 วินาที / เก็บทุกครั้ง), cron ทุก 10 วินาที (ดูข้อ 8) |
+| `supabase/migrations/20261127_lucky_draw.sql` | เจ้าแม่คงคาประกาศผู้โชคดี: ตาราง config/ผล, run_lucky_draw, get_lucky_draw_state, cron, Realtime (ดูข้อ 9) |
+| `supabase/tests/lucky_draw_test.sql` | ทดสอบการจับผู้โชคดีแบบจำลองเวลา (รันใน SQL Editor) |
 | `supabase/tests/coin_collector_test.sql` | ทดสอบกติกาเก็บเหรียญแบบจำลองเวลา (รันใน SQL Editor) |
 | `scripts/test-supabase.mjs` | ทดสอบ schema + RLS ด้วย anon key (`npm run test:supabase`) |
 
@@ -134,7 +137,7 @@ delete from public.krathongs where name like 'ทดสอบ%';
   - **Netlify:** Site configuration > Environment variables
 - **ห้าม** commit `.env.local` หรือใส่ key ลงใน repo
 - Vite ฝังค่าเหล่านี้ตอน **build** ถ้าเปลี่ยนค่าที่ hosting ต้อง **deploy ใหม่** ถึงจะมีผล
-- ถ้าลืมตั้งค่า เว็บยังเปิดได้ แต่จะขึ้นข้อความ "ระบบยังไม่พร้อมใช้งาน" และแม่น้ำแสดงกระทงตัวอย่างแทน
+- ถ้าลืมตั้งค่า เว็บยังเปิดได้ แต่จะขึ้นข้อความ "ระบบยังไม่พร้อมใช้งาน" และบันทึกกระทงไม่ได้
   รายละเอียดดูได้ใน Console ของ browser
 
 ## 7) ถ้า key หลุดไป GitHub
@@ -158,38 +161,115 @@ delete from public.krathongs where name like 'ทดสอบ%';
 
 เด็กจะโผล่จากน้ำมาเก็บเหรียญ 10 จากกระทงที่มีเหรียญ **server เป็นคนตัดสิน** ผ่าน pg_cron แล้วทุกเครื่องที่เปิดเว็บอยู่เห็นพร้อมกันผ่าน Realtime
 
-กติกา (ตั้งค่าใน `public.collect_one_coin` ใน `supabase/migrations/20261124_coin_collector.sql`)
+กติกา (ค่าอยู่ในตาราง `public.coin_collector_config` แถวเดียว แก้ที่เดียว)
 
-- กระทงที่มีสิทธิ์: มีเหรียญ 10, ยังไม่ถูกเก็บ, สร้างมาแล้วอย่างน้อย 2 นาที (เวลา server)
-- cron รันทุก 1 นาที แต่บังคับ cooldown 110 วินาทีระหว่างรอบ จึงเก็บราวทุก 2 นาที (cooldown ไม่ตั้ง 120 พอดี กันรอบถูกข้ามเพราะเวลาคลาดเสี้ยววินาที)
-- แต่ละรอบสุ่มกระทงมีสิทธิ์ 1 ใบ และสุ่มโอกาส 70% ว่าเด็กจะมาเก็บหรือไม่ (ไม่มีกระทงมีสิทธิ์ = ไม่นับเป็นรอบ)
+| ค่า | ปัจจุบัน | ความหมาย |
+| --- | --- | --- |
+| `min_age` | 20 วินาที | กระทงต้องสร้างมาแล้วอย่างน้อยเท่านี้ (เวลา server) |
+| `cooldown` | 20 วินาที | ระยะห่างขั้นต่ำระหว่างรอบ (ต้องยาวกว่าแอนิเมชันเด็ก 5 วินาที) |
+| `chance` | 1 | โอกาสที่เด็กจะโผล่ในรอบที่มีกระทงมีสิทธิ์ (1 = ครบเวลาแล้วเก็บเลย ไม่สุ่ม) |
+
+- pg_cron เรียก `collect_one_coin()` **ทุก 10 วินาที** ฟังก์ชันบังคับ cooldown เอง จึงเก็บได้ราวทุก 20 วินาที
+  (ยอมให้คลาด 2 วินาที เพราะ cron แต่ละรอบเริ่มช้า/เร็วได้เสี้ยววินาที ถ้าเทียบ 20 วินาทีเป๊ะ บางรอบจะถูกข้ามไปเป็น 30 วินาที
+  รอบ cron ห่างกัน 10 วินาที จึงไม่มีการเก็บก่อน 20 วินาทีจริง)
+- "รอบ" = ครั้งที่มีกระทงมีสิทธิ์และพ้น cooldown: สุ่มเลือกกระทงมีสิทธิ์ 1 ใบ แล้วเก็บเลย (ไม่สุ่มว่าจะโดนไหม)
+  ไม่มีกระทงมีสิทธิ์ = ไม่นับเป็นรอบ / ถ้าตั้ง `chance` ต่ำกว่า 1 จะกลับมาสุ่มโอกาส (สุ่มไม่ผ่าน = รอรอบถัดไป)
 - เก็บแล้วตั้ง `coin_collected_at` (ไม่ลบเหรียญออกจาก `decorations` เก็บไว้ทำสถิติ) ใบที่ถูกเก็บแล้วไม่ถูกเก็บซ้ำ
 - ผู้ใช้เว็บสั่งเก็บเองไม่ได้: ถอนสิทธิ์ execute ของฟังก์ชันจาก anon/authenticated และยังไม่มีสิทธิ์ UPDATE ตาราง
+  ตาราง config/สถานะ ผู้ใช้เว็บอ่าน/แก้ไม่ได้
+
+ฝั่งเว็บ: เด็กโผล่ **กลางจอ** โดยรอให้กระทงเป้าหมายลอยมาถึงกลางจอเอง (เหรียญยังอยู่บนกระทงระหว่างรอ)
+แอนิเมชันยาว 5 วินาที ก้มสุดที่ 2.3 วินาที = เหรียญหาย + แจ้งเตือน "เด็กเก็บเหรียญจากกระทงของ …" (ค้าง 15 วินาที)
 
 ### 8.1 ติดตั้ง
 
 1. **เปิด pg_cron:** Dashboard > **Integrations > Cron** > Enable (หรือ **Database > Extensions** ค้นหา `pg_cron` แล้วเปิด)
-   ถ้าข้ามขั้นนี้ migration จะพยายามเปิดให้เอง ถ้าไม่ผ่านค่อยเปิดจาก Dashboard แล้วรันใหม่
-2. **รัน migration:** SQL Editor > New query > วางทั้งไฟล์ `supabase/migrations/20261124_coin_collector.sql` > Run
-   (ต้องรัน `supabase/schema.sql` มาก่อนแล้ว / รันซ้ำได้)
+2. **รัน migration ตามลำดับ** ใน SQL Editor (New query > วางทั้งไฟล์ > Run รันซ้ำได้):
+   1. `supabase/migrations/20261124_coin_collector.sql` (คอลัมน์ `coin_collected_at`, ฟังก์ชัน, Realtime)
+   2. `supabase/migrations/20261126_coin_collector_v2.sql` (ค่าตั้งใหม่ 20 วินาที / เก็บทุกครั้ง, cron ทุก 10 วินาที)
+   - v2 เช็คเวอร์ชัน pg_cron ก่อน: ต้อง 1.5 ขึ้นไปถึงจะตั้งรอบเป็นวินาทีได้ ถ้าต่ำกว่าจะหยุดพร้อมข้อความ (ไม่แก้อะไร)
+     เช็คเอง: `select extversion from pg_extension where extname = 'pg_cron';`
 3. **เช็ค Realtime:** Dashboard > **Database > Publications** > `supabase_realtime` ต้องมีตาราง `krathongs`
-   (migration เพิ่มให้แล้ว หรือเปิดที่ Table Editor > `krathongs` > ปุ่ม Realtime)
-4. **เช็ค cron:** Integrations > Cron ต้องเห็นงาน `collect-one-coin` ตาราง `* * * * *` และในแท็บประวัติต้องเห็นรันทุกนาที
+4. **เช็ค cron:** Integrations > Cron ต้องเห็นงาน `collect-one-coin` รอบ `10 seconds`
    หรือ SQL: `select jobname, schedule, active from cron.job;`
 
 ### 8.2 ทดสอบ
 
 - **ทดสอบกติกาแบบจำลองเวลา (ไม่ต้องรอจริง):** รัน `supabase/tests/coin_collector_test.sql` ใน SQL Editor
   ผลจะขึ้นเป็น `ERROR: TEST REPORT ...` โดยตั้งใจ (เพื่อย้อนข้อมูลทดสอบทั้งหมด) ทุกบรรทัดต้องเป็น `PASS` และจบด้วย `ALL PASSED`
-- **ทดสอบสิทธิ์:** `npm run test:supabase` (หัวข้อ 4b: anon เรียกฟังก์ชัน/แก้ coin_collected_at ไม่ได้)
-- **ดูของจริง:** สร้างกระทงที่มีเหรียญ รอ 2–4 นาที (โอกาส 70% บางรอบเด็กจะไม่มา) แล้วดูในเว็บ
+- **ทดสอบสิทธิ์:** `npm run test:supabase` (หัวข้อ 4b: anon เรียกฟังก์ชัน/แก้ coin_collected_at/อ่าน config ไม่ได้)
+- **ดูของจริง:** สร้างกระทงที่มีเหรียญ รอ 20 วินาทีขึ้นไป แล้วดูในเว็บ (เด็กจะรอให้กระทงลอยมาถึงกลางจอก่อน)
   ดูประวัติการเก็บ: `select name, created_at, coin_collected_at from public.krathongs where coin_collected_at is not null order by coin_collected_at desc;`
 
 ### 8.3 ปรับค่า / ปิดชั่วคราว
 
-- เปลี่ยนโอกาส/cooldown/อายุขั้นต่ำ: แก้ค่า default ของพารามิเตอร์ใน `collect_one_coin` แล้วรัน migration ใหม่
-- หยุดชั่วคราว: `select cron.unschedule('collect-one-coin');` (เปิดใหม่: รัน migration อีกครั้ง)
+- เปลี่ยนโอกาส/อายุขั้นต่ำ/cooldown (มีผลทันที ไม่ต้องรัน migration ใหม่):
+  `update public.coin_collector_config set chance = 0.8, min_age = interval '30 seconds', cooldown = interval '30 seconds';`
+  (cooldown ต่ำสุด 5 วินาที = ความยาวแอนิเมชัน / ถ้าปรับ cooldown ให้เป็นเลขที่หารด้วยรอบ cron 10 วินาทีลงตัว)
+- หยุดชั่วคราว: `select cron.unschedule('collect-one-coin');` (เปิดใหม่: รัน migration v2 อีกครั้ง)
 - คืนเหรียญทั้งหมด (เช่น หลังทดสอบ): `update public.krathongs set coin_collected_at = null;`
+
+---
+
+## 9) เจ้าแม่คงคาประกาศผู้โชคดี (Lucky Draw)
+
+เจ้าแม่คงคาผุดขึ้นกลางแม่น้ำ เลือกกระทง 1 ใบ แล้วประกาศชื่อผู้โชคดี ค้างบนจอ ~5 นาทีแล้วจางหาย
+**จับครั้งเดียวตลอดไป ผู้โชคดี 1 คน** ตัดสินที่ server (pg_cron) ทุกเครื่องเห็นช่วงเวลาเดียวกัน (คิดจากเวลา server)
+รางวัลแจกที่งานออฟไลน์ (เว็บไม่ติดต่อผู้ชนะ)
+
+> ⚠️ **ห้ามเปิด `enabled` บน database จริงระหว่างทดสอบแล้วทิ้งไว้** ไม่งั้นสิทธิ์จับครั้งเดียวจะถูกใช้ไป
+> ถ้าเปิดเพื่อทดสอบ ต้องรีเซ็ตตามข้อ 9.4 ทุกครั้ง
+>
+> ข้อจำกัดที่รับทราบ: ยังไม่มีการกรองคำไม่เหมาะสมในชื่อผู้ใช้ (ชื่อผู้ชนะแสดงตามที่พิมพ์)
+
+กติกา
+
+- เมื่อมี **กระทงใบแรกที่สร้างหลังเปิดกิจกรรม** และผ่านไป `delay_seconds` (120 วินาที) → จับ 1 ครั้ง
+  สุ่ม 1 ใบจากกระทงทั้งหมดที่สร้างหลังเปิดกิจกรรม ณ ตอนจับ (กระทงล่องหนก็มีสิทธิ์)
+- จับแล้วไม่จับอีก: database บังคับให้ `lucky_draws` มีได้แค่ 1 แถว (ใส่แถวที่สองจะถูกปฏิเสธ)
+- ค่าตั้งอยู่ในตาราง `public.lucky_draw_config` (แถวเดียว id = 1)
+
+| ค่า | ค่าเริ่มต้น | ความหมาย |
+| --- | --- | --- |
+| `enabled` | false | เปิดกิจกรรมหรือยัง |
+| `enabled_at` | - | เวลาเปิดกิจกรรม (นับเฉพาะกระทงที่สร้างหลังเวลานี้) |
+| `delay_seconds` | 120 | จับหลังกระทงใบแรกของกิจกรรมกี่วินาที |
+| `hold_seconds` | 300 | เจ้าแม่ค้างบนจอกี่วินาที (ไม่รวมช่วงผุด 7 วินาทีและจางหาย 4 วินาที) |
+
+- ผู้ใช้เว็บอ่านได้อย่างเดียวผ่าน `get_lucky_draw_state()` (ไม่มีคำอธิษฐานของผู้ชนะ) — สั่งจับ/แก้ผล/อ่านค่าตั้งไม่ได้
+
+### 9.1 ติดตั้ง
+
+1. ต้องเปิด pg_cron แล้ว (ข้อ 8.1)
+2. SQL Editor > รัน `supabase/migrations/20261127_lucky_draw.sql` (รันซ้ำได้ ไม่เปิดกิจกรรมเอง)
+3. เช็ค: Integrations > Cron ต้องเห็นงาน `run-lucky-draw` รอบ `10 seconds`
+   และ Database > Publications > `supabase_realtime` ต้องมีตาราง `lucky_draws`
+
+### 9.2 ทดสอบ (ไม่ใช้สิทธิ์จับจริง)
+
+- รัน `supabase/tests/lucky_draw_test.sql` ใน SQL Editor → ขึ้น `ERROR: TEST REPORT ...` โดยตั้งใจ ทุกบรรทัดต้อง `PASS` และจบด้วย `ALL PASSED`
+  (จำลองเวลาและย้อนกลับทั้งหมด ไม่เปิดกิจกรรมจริง)
+- `npm run test:supabase` หัวข้อ 4c: anon อ่านสถานะได้ แต่สั่งจับ/เขียนผล/อ่านค่าตั้งไม่ได้
+
+### 9.3 เปิดกิจกรรมจริง (วันงาน)
+
+```sql
+delete from public.lucky_draws;
+update public.lucky_draw_config set enabled = true, enabled_at = now() where id = 1;
+```
+
+นับจากนี้ กระทงใบแรกที่มีคนสร้าง + 2 นาที = เจ้าแม่ผุดประกาศผู้โชคดีบนทุกจอ
+ดูผล: `select k.name, d.drawn_at from public.lucky_draws d join public.krathongs k on k.id = d.krathong_id;`
+
+ปรับเวลา (ทำก่อนเปิดกิจกรรม): `update public.lucky_draw_config set delay_seconds = 300, hold_seconds = 600 where id = 1;`
+
+### 9.4 รีเซ็ตหลังทดสอบ
+
+```sql
+delete from public.lucky_draws;                                              -- ลบผลก่อน (กระทงผู้ชนะลบไม่ได้ถ้ายังมีผลอยู่)
+update public.lucky_draw_config set enabled = false, enabled_at = null where id = 1;
+delete from public.krathongs where name like 'ทดสอบ%';                        -- ลบกระทงทดสอบ
+```
 
 ---
 
@@ -197,7 +277,7 @@ delete from public.krathongs where name like 'ทดสอบ%';
 
 - ทุกคนเห็นชื่อและคำอธิษฐานของทุกกระทง ในแม่น้ำและในหน้า "ดูคำอธิษฐานทั้งหมด"
   หน้ากรอกจึงแนะนำให้ใช้ชื่อเล่นหรือนามแฝง
-- ถ้ายังไม่มีกระทงในฐานข้อมูล แม่น้ำจะแสดงกระทงตัวอย่างแทน และตัวนับจะนับเฉพาะกระทงจริง
+- ถ้ายังไม่มีกระทงในฐานข้อมูล แม่น้ำจะว่าง และตัวนับเป็น 0 (ไม่มีกระทงตัวอย่าง)
 - เว็บดึงกระทงใหม่ทุก 60 วินาทีขณะเปิดดูอยู่ และทุกครั้งที่กลับมาที่แท็บ
 - ยังไม่มีระบบกันสแปมแบบจำกัดจำนวนครั้ง มีแค่ CHECK ความยาวและค่าที่ยอมรับ
   ถ้าเปิดใช้จริงแล้วโดนสแปม ให้พิจารณาเพิ่ม Supabase Edge Function + CAPTCHA (เช่น Cloudflare Turnstile)

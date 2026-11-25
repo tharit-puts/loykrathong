@@ -1,22 +1,38 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef } from 'react';
 import kidArt from '../assets/kid/kid.webp';
 import coinArt from '../assets/kid/coin-single.webp';
 
 /**
- * เด็กโผล่จากน้ำมาหยิบเหรียญ 10 จากกระทง (เล่นครั้งเดียว ~2.8 วินาที แล้วเรียก onFinish)
+ * เด็กโผล่จากน้ำมาหยิบเหรียญ 10 จากกระทง (เล่นครั้งเดียว 5 วินาที แล้วเรียก onFinish)
  *
  * วางในกล่องเดียวกับกระทง (กว้าง krathongW, มุมซ้ายบน = มุมซ้ายบนของรูปกระทง) ลอยไปพร้อมกระทง
  * ตำแหน่งเด็กคำนวณย้อนจากจุดเหรียญบนกระทง: ตอนก้มสุด ปลายนิ้วที่หยิบต้องอยู่ตรงเหรียญพอดี ทุกขนาดจอ
- *
- * ลำดับ (ดู keyframes kid-body / kid-coin / kid-ripple ใน styles/index.css):
- *   0–0.6s โผล่ขึ้นจากน้ำ → 0.8–1.2s ก้มไปหากระทง (ก้มสุด = onBend ซ่อนเหรียญบนกระทง)
- *   → 1.2–1.6s ยืดตัวกลับ เหรียญ pop ในมือ → ค้าง ~0.5s → 2.1–2.7s ดำน้ำหาย → onFinish
  * แนวน้ำ: ตัดภาพส่วนที่อยู่ใต้แนวน้ำของกระทงทิ้ง (clip-path) เด็กจึงดูจมน้ำอยู่ครึ่งตัวในทุกแถว
+ *
+ * แอนิเมชันใช้ Web Animations API: เวลาแต่ละช่วงอยู่ใน KID_PHASES ที่เดียว (จังหวะ onBend คิดจากค่าชุดเดียวกัน)
+ * เล่นเสมอแม้เครื่องเปิดลดการเคลื่อนไหว (prefers-reduced-motion) ตามที่ตกลงไว้
  */
 
-/** ระยะเวลาทั้งหมด และจังหวะก้มสุด (ต้องตรงกับ % ใน keyframes kid-body) */
-export const KID_DURATION_MS = 2800;
-const BEND_AT = 0.43;
+/** ความยาวแต่ละช่วง (ms) — แก้ตรงนี้ที่เดียว รวมกันคือความยาวทั้งหมด */
+export const KID_PHASES = {
+  /** 1. โผล่ขึ้นจากน้ำ (ease-out) */
+  rise: 1000,
+  /** 2. ค้าง มองหาเป้าหมาย */
+  look: 500,
+  /** 3. ก้มไปหากระทง → จบช่วงนี้ = ก้มสุด (onBend: เหรียญบนกระทงหาย) */
+  bend: 800,
+  /** 4. ยืดตัวกลับ เหรียญในมือ pop */
+  straighten: 700,
+  /** 5. ค้างโชว์เหรียญในมือ */
+  hold: 1000,
+  /** 6. ดำน้ำหาย (ease-in) แล้ว unmount */
+  dive: 1000,
+} as const;
+
+/** ความยาวทั้งหมด (5 วินาที) */
+export const KID_DURATION_MS = Object.values(KID_PHASES).reduce((a, b) => a + b, 0);
+/** จังหวะก้มสุด (ms จากเริ่ม) */
+export const KID_BEND_AT_MS = KID_PHASES.rise + KID_PHASES.look + KID_PHASES.bend;
 
 /* ---------- สัดส่วนในภาพเด็ก (kid.webp 600×800 = ต้นฉบับ 1086×1448) ---------- */
 const KID_ASPECT = 600 / 800;
@@ -53,8 +69,6 @@ interface Props {
   onFinish: () => void;
 }
 
-type KidVars = CSSProperties & Record<'--kid-hide' | '--kid-tx' | '--kid-ty' | '--kid-bend', string>;
-
 /**
  * คำนวณตำแหน่งเด็ก (px ในกล่องกระทง)
  * - ท่ายืน: ปลายนิ้วที่หยิบลอยอยู่ซ้าย-บนของเหรียญ (HOVER)
@@ -85,28 +99,90 @@ function geometry(w: number) {
   return { kidW, kidH, left, top, waterY, tx, ty, hide: waterY - top + 6 };
 }
 
+/** จุดกึ่งกลางแนวนอนของตัวเด็ก (px จากขอบซ้ายรูปกระทง) ใช้คำนวณว่ากระทงต้องอยู่ตรงไหนเด็กถึงจะอยู่กลางจอ */
+export function kidCenterX(krathongW: number) {
+  const g = geometry(krathongW);
+  return g.left + g.kidW / 2;
+}
+
+const ease = {
+  out: 'cubic-bezier(0.2, 0.8, 0.3, 1)',
+  inOut: 'ease-in-out',
+  in: 'cubic-bezier(0.55, 0, 0.9, 0.45)',
+};
+
 export default function CoinKid({ krathongW, onBend, onFinish }: Props) {
   const onBendRef = useRef(onBend);
   onBendRef.current = onBend;
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
 
+  const g = geometry(krathongW);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const coinRef = useRef<HTMLImageElement>(null);
+  const rippleRef = useRef<HTMLSpanElement>(null);
+
   useEffect(() => {
-    const bend = window.setTimeout(() => onBendRef.current(), KID_DURATION_MS * BEND_AT);
-    const done = window.setTimeout(() => onFinishRef.current(), KID_DURATION_MS);
+    const P = KID_PHASES;
+    const T = KID_DURATION_MS;
+    // จุดเปลี่ยนช่วง (สัดส่วน 0–1 ของเวลาทั้งหมด)
+    const up = P.rise / T;
+    const lookEnd = (P.rise + P.look) / T;
+    const bendAt = KID_BEND_AT_MS / T;
+    const straight = (KID_BEND_AT_MS + P.straighten) / T;
+    const holdEnd = (KID_BEND_AT_MS + P.straighten + P.hold) / T;
+
+    const down = `translate(0px, ${g.hide.toFixed(1)}px) rotate(0deg)`;
+    const stand = 'translate(0px, 0px) rotate(0deg)';
+    const lean = `translate(${g.tx.toFixed(1)}px, ${g.ty.toFixed(1)}px) rotate(${BEND_DEG}deg)`;
+    const opts: KeyframeAnimationOptions = { duration: T, fill: 'both' };
+    const coin = (scale: number) => `translate(-50%, -50%) scale(${scale})`;
+
+    const anims = [
+      bodyRef.current?.animate(
+        [
+          { offset: 0, transform: down, easing: ease.out },
+          { offset: up, transform: stand },
+          { offset: lookEnd, transform: stand, easing: ease.inOut },
+          { offset: bendAt, transform: lean, easing: ease.inOut },
+          { offset: straight, transform: stand },
+          { offset: holdEnd, transform: stand, easing: ease.in },
+          { offset: 1, transform: down },
+        ],
+        opts,
+      ),
+      // เหรียญในมือ: โผล่หลังก้มสุด ขยายเกินแล้วเด้งกลับ (bounce เล็กน้อย) ภายในช่วงยืดตัว
+      coinRef.current?.animate(
+        [
+          { offset: 0, transform: coin(0) },
+          { offset: bendAt, transform: coin(0), easing: 'ease-out' },
+          { offset: bendAt + (straight - bendAt) * 0.5, transform: coin(1.3), easing: 'ease-in-out' },
+          { offset: bendAt + (straight - bendAt) * 0.8, transform: coin(0.9), easing: 'ease-out' },
+          { offset: straight, transform: coin(1) },
+          { offset: 1, transform: coin(1) },
+        ],
+        opts,
+      ),
+      // วงน้ำรอบตัว: แผ่ออกตอนโผล่ จางหายตอนดำน้ำ
+      rippleRef.current?.animate(
+        [
+          { offset: 0, opacity: 0, transform: 'translateY(-50%) scaleX(0.4)' },
+          { offset: up * 0.9, opacity: 1, transform: 'translateY(-50%) scaleX(1)' },
+          { offset: holdEnd, opacity: 1, transform: 'translateY(-50%) scaleX(1)' },
+          { offset: 1, opacity: 0, transform: 'translateY(-50%) scaleX(1.3)' },
+        ],
+        opts,
+      ),
+    ];
+
+    const bend = window.setTimeout(() => onBendRef.current(), KID_BEND_AT_MS);
+    const done = window.setTimeout(() => onFinishRef.current(), T);
     return () => {
       window.clearTimeout(bend);
       window.clearTimeout(done);
+      for (const a of anims) a?.cancel();
     };
-  }, []);
-
-  const g = geometry(krathongW);
-  const vars: KidVars = {
-    '--kid-hide': `${g.hide.toFixed(1)}px`,
-    '--kid-tx': `${g.tx.toFixed(1)}px`,
-    '--kid-ty': `${g.ty.toFixed(1)}px`,
-    '--kid-bend': `${BEND_DEG}deg`,
-  };
+  }, [g.hide, g.tx, g.ty]);
 
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0">
@@ -116,15 +192,17 @@ export default function CoinKid({ krathongW, onBend, onFinish }: Props) {
         style={{ left: g.left, top: g.top, width: g.kidW, height: g.waterY - g.top }}
       >
         <div
-          className="absolute top-0 left-0 origin-[40%_85%] animate-kid-body"
-          style={{ ...vars, width: g.kidW, height: g.kidH }}
+          ref={bodyRef}
+          className="absolute top-0 left-0 origin-[40%_85%]"
+          style={{ width: g.kidW, height: g.kidH, transform: `translate(0px, ${g.hide}px)` }}
         >
           {/* เหรียญอยู่หลังภาพเด็ก: ปลายนิ้วบังขอบบนเหรียญ ดูเหมือนถูกหยิบอยู่ */}
           <img
             src={coinArt}
             alt=""
             draggable={false}
-            className="absolute aspect-square max-w-none animate-kid-coin select-none"
+            ref={coinRef}
+            className="absolute aspect-square max-w-none scale-0 select-none"
             style={{ left: `${PINCH.x * 100}%`, top: `${PINCH.y * 100}%`, width: g.kidW * COIN_W }}
           />
           <img src={kidArt} alt="" draggable={false} className="relative block size-full max-w-none select-none" />
@@ -133,7 +211,8 @@ export default function CoinKid({ krathongW, onBend, onFinish }: Props) {
 
       {/* วงน้ำกระเพื่อมรอบตัวเด็กที่แนวน้ำ */}
       <span
-        className="absolute h-[10px] -translate-y-1/2 animate-kid-ripple rounded-[50%] border-2 border-white/70 bg-white/25 blur-[0.5px]"
+        ref={rippleRef}
+        className="absolute h-[10px] rounded-[50%] border-2 border-white/70 bg-white/25 opacity-0 blur-[0.5px]"
         style={{ left: g.left + g.kidW * 0.08, top: g.waterY, width: g.kidW * 0.72 }}
       />
     </div>

@@ -41,7 +41,7 @@ function hash(s: string) {
   return h;
 }
 
-/** กระทงเก่า/ตัวอย่างที่ไม่มี lane หรือ x ให้ค่าคงที่จาก id */
+/** กระทงที่ไม่มี lane หรือ x (เช่น สร้างผ่าน API โดยไม่ส่งค่า) ให้ค่าคงที่จาก id */
 export const laneOf = (k: Krathong): Lane => k.lane ?? ((hash(k.id) % 3) as Lane);
 export const xOf = (k: Krathong) => k.x ?? (hash(`${k.id}:x`) % 1000) / 1000;
 

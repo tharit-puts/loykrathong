@@ -1,14 +1,17 @@
 import { useCallback, useRef, useState } from 'react';
 import scene from './assets/bg/scene.webp';
 import sceneMobile from './assets/bg/scene-mobile.webp';
+import qrCode from './assets/qr-code.png';
 import { MOBILE_PORTRAIT } from './lib/media';
 import CreateKrathongWizard from './components/CreateKrathongWizard';
 import Hero from './components/Hero';
 import Navbar from './components/Navbar';
+import NotificationsHost from './components/Notifications';
 import River from './components/River';
 import WelcomePopup from './components/WelcomePopup';
 import WishesModal from './components/WishesModal';
 import { useKrathongs } from './hooks/useKrathongs';
+import { useLuckyDraw } from './hooks/useLuckyDraw';
 import type { ModalName, NewKrathong } from './types';
 
 export default function App() {
@@ -21,6 +24,8 @@ export default function App() {
     canAnimate,
   });
   /** ความสูงของฉากหลัง (px) = ตำแหน่งร่องคลื่นแรกของแม่น้ำ */
+  /** เจ้าแม่คงคาประกาศผู้โชคดี (สถานะจาก server) */
+  const luckyDraw = useLuckyDraw();
   const [sceneBottom, setSceneBottom] = useState<number | null>(null);
 
   const closeModal = useCallback(() => setModal(null), []);
@@ -59,6 +64,10 @@ export default function App() {
             style={sceneBottom ? { height: sceneBottom } : undefined}
           />
           <Hero count={count} onCreate={() => setModal('create')} />
+          {/* QR code มุมขวาบน: เฉพาะจอกว้าง 900px ขึ้นไป (จอแคบกว่านี้จะชนป้ายโลโก้ และมือถือไม่ต้องแสดง) — การ์ดพื้นขาวเป็นขอบว่าง (quiet zone) ให้สแกนติดง่าย */}
+          <div className="absolute top-4 right-4 hidden rounded-2xl border-2 border-gold bg-white p-2.5 shadow-[0_6px_20px_rgba(0,0,0,0.4),0_0_14px_rgba(232,184,74,0.35)] min-[900px]:block">
+            <img src={qrCode} alt="QR code" width={384} height={384} draggable={false} className="block size-[clamp(104px,9vw,140px)] select-none" />
+          </div>
           <River
             krathongs={all}
             latestId={latestId}
@@ -66,9 +75,10 @@ export default function App() {
             collectingId={collecting?.id ?? null}
             onKidBend={onKidBend}
             onKidFinish={onKidFinish}
+            luckyDraw={luckyDraw}
           />
 
-          {/* เชื่อมต่อฐานข้อมูลไม่ได้: แจ้งแบบสุภาพ หน้าเว็บยังใช้ได้ (แม่น้ำแสดงกระทงตัวอย่าง) */}
+          {/* เชื่อมต่อฐานข้อมูลไม่ได้: แจ้งแบบสุภาพ หน้าเว็บยังใช้ได้ */}
           {loadError && (
             <div
               role="status"
@@ -91,6 +101,8 @@ export default function App() {
       <WishesModal open={modal === 'wishes'} onClose={closeModal} />
       {/* popup ต้อนรับ: ขึ้นเฉพาะครั้งแรกที่เข้าเว็บ */}
       <WelcomePopup />
+      {/* แจ้งเตือน (toast) ตัวเดียวของทั้งเว็บ: อยู่เหนือ popup และหน้าต่างสร้างกระทงเสมอ */}
+      <NotificationsHost />
     </>
   );
 }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import KrathongIcon from './KrathongIcon';
 import Modal from './Modal';
-import { SAMPLE_KRATHONGS } from '../data/samples';
 import { fetchKrathongs, friendlyError } from '../services/krathongs';
 import { KRATHONG_LABELS, shownDecorations, type Krathong } from '../types';
 
@@ -15,7 +14,7 @@ const PAGE_SIZE = 50;
 
 /**
  * คำอธิษฐานทั้งหมด (ใหม่สุดก่อน) ดึงจาก Supabase ทุกครั้งที่เปิด แบ่งหน้าด้วยปุ่ม "ดูเพิ่มเติม"
- * ถ้ายังไม่มีใครลอยกระทง แสดงกระทงตัวอย่าง (มีป้าย "ตัวอย่าง")
+ * ถ้ายังไม่มีใครลอยกระทง แสดงข้อความว่ายังไม่มีคำอธิษฐาน
  */
 export default function WishesModal({ open, onClose }: Props) {
   const [items, setItems] = useState<Krathong[]>([]);
@@ -52,7 +51,7 @@ export default function WishesModal({ open, onClose }: Props) {
     if (open) load(0);
   }, [open, load]);
 
-  const list = loaded && items.length === 0 ? [...SAMPLE_KRATHONGS].reverse() : items;
+  const list = items;
 
   return (
     <Modal open={open} title="คำอธิษฐานทั้งหมด" onClose={onClose}>
@@ -64,15 +63,16 @@ export default function WishesModal({ open, onClose }: Props) {
                 <KrathongIcon type={k.type} decorations={shownDecorations(k)} className="h-[47px] w-14 flex-none" />
                 <div className="min-w-0 break-words">
                   <b className="font-head font-medium">{k.name}</b>
-                  {k.sample && (
-                    <span className="ml-1.5 rounded-lg bg-line px-2 py-px text-[12px] text-mute">ตัวอย่าง</span>
-                  )}
                   <div className="text-[13px] text-mute">กระทง{KRATHONG_LABELS[k.type]}</div>
                   <div>{k.wish}</div>
                 </div>
               </li>
             ))}
           </ul>
+        )}
+
+        {loaded && !loading && !error && items.length === 0 && (
+          <p className="py-6 text-center text-mute">ยังไม่มีคำอธิษฐาน มาเป็นคนแรกที่ลอยกระทงกันเถอะ</p>
         )}
 
         {loading && (

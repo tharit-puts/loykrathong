@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, typ
 import KrathongIcon, { DecorationArt } from './KrathongIcon';
 import KrathongPreview from './KrathongPreview';
 import { DECORATION_OPTIONS, KRATHONG_OPTIONS } from '../data/krathongOptions';
-import { SAMPLE_WISHES, TERMS } from '../data/wishes';
+import { TERMS } from '../data/wishes';
 import { NAME_MAX, WISH_MAX, type Decoration, type KrathongType, type NewKrathong } from '../types';
 
 interface Props {
@@ -14,12 +14,6 @@ interface Props {
 
 type Step = 1 | 2 | 3;
 const STEPS = ['เลือกกระทง', 'ตกแต่งกระทง', 'พิมพ์คำอธิษฐาน'];
-
-/** สุ่มคำอธิษฐาน ไม่ให้ซ้ำกับข้อความเดิม */
-function pickWish(current: string) {
-  const pool = SAMPLE_WISHES.filter((w) => w !== current);
-  return pool[Math.floor(Math.random() * pool.length)];
-}
 
 /* ---------- ชิ้นส่วน UI ---------- */
 
@@ -149,8 +143,6 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
   const [decorations, setDecorations] = useState<Decoration[]>([]);
   const [name, setName] = useState('');
   const [wish, setWish] = useState('');
-  /** ผู้ใช้แก้คำอธิษฐานเองแล้ว → ไม่สุ่มทับอีก */
-  const [wishEdited, setWishEdited] = useState(false);
   /** กำลังบันทึกลงฐานข้อมูล / ข้อความเมื่อบันทึกไม่สำเร็จ */
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -165,7 +157,6 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
       setDecorations([]);
       setName('');
       setWish('');
-      setWishEdited(false);
       setSubmitting(false);
       setSubmitError(null);
       d.showModal();
@@ -184,8 +175,6 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
   }, [step, open]);
 
   const goTo = (next: Step) => {
-    // เข้า step 3: สุ่มคำอธิษฐานใหม่ทุกครั้ง ถ้าผู้ใช้ยังไม่ได้แก้เอง
-    if (next === 3 && !wishEdited) setWish((w) => pickWish(w));
     setStep(next);
   };
 
@@ -211,7 +200,7 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
     }
   };
 
-  const inputBase = 'w-full bg-[rgba(8,52,88,0.55)] text-[16px] text-white placeholder:text-white/65';
+  const inputBase = 'w-full bg-[rgba(8,52,88,0.55)] text-[16px] text-white placeholder:text-mute/80';
 
   return (
     <dialog
@@ -372,10 +361,9 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
                       className={`${inputBase} min-h-24 resize-y rounded-2xl border-2 border-white px-4 py-3 leading-normal`}
                       value={wish}
                       maxLength={WISH_MAX}
-                      onChange={(e) => {
-                        setWish(e.target.value);
-                        setWishEdited(true);
-                      }}
+                      // ผู้ใช้พิมพ์เองทั้งหมด: เริ่มว่าง "ขอให้..." เป็นแค่คำใบ้ (ไม่นับตัวอักษร ไม่ถูกบันทึก)
+                      placeholder="ขอให้..."
+                      onChange={(e) => setWish(e.target.value)}
                     />
                     <div className="mt-1 px-2 text-right text-[12px] text-white/85 tabular-nums">
                       {wish.length}/{WISH_MAX}

@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
 import bridgeRail from '../assets/bg/bridge-rail.webp';
 import CoinKid from './CoinKid';
+import RiverGoddess from './RiverGoddess';
 import KrathongIcon from './KrathongIcon';
 import { LAYERS, WaveLayer } from './RiverWaves';
 import { LANE_WATERLINE, MAX_VISIBLE, lanePath, laneOf, pathPos, xOf } from '../lib/riverLayout';
+import type { LuckyDrawView } from '../hooks/useLuckyDraw';
 import type { Krathong, Lane } from '../types';
 
 interface Props {
@@ -15,6 +17,8 @@ interface Props {
   onSceneBottom?: (y: number) => void;
   /** กระทงที่เด็กกำลังมาเก็บเหรียญ (null = ไม่มี) */
   collectingId?: string | null;
+  /** เจ้าแม่คงคาประกาศผู้โชคดี (null = ไม่มีเหตุการณ์ตอนนี้) */
+  luckyDraw?: LuckyDrawView | null;
   onKidBend?: (id: string) => void;
   onKidFinish?: (id: string) => void;
 }
@@ -28,6 +32,8 @@ const DROP_WINDOW_MS = 2000;
  * แม่น้ำเตี้ย (จอคอมแนวนอน) แถบก็บางลง ไม่กินที่กระทง
  */
 const bridgeHeight = (riverH: number) => Math.round(Math.min(120, Math.max(56, riverH * 0.24)));
+/** แนวผิวน้ำของแถว (px จากขอบบนแม่น้ำ) — แถวหน้าสุดต้องลอยเหนือราวสะพาน (เว้นไว้ 16px) ไม่ให้จมหายไปหลังสะพาน */
+const laneWaterY = (box: { h: number }, lane: Lane) => Math.min(box.h * LANE_WATERLINE[lane], box.h - bridgeHeight(box.h) - 16);
 /** มือถือ: แตะกระทงแล้วแสดงคำอธิษฐานนานเท่านี้ */
 const TAP_SHOW_MS = 5000;
 
@@ -60,8 +66,7 @@ interface Layout {
 function layout(k: Krathong, lane: Lane, box: Box, mountedAt: number): Layout {
   const { width, start, end, travel, speed } = lanePath(box.w, lane);
   const iconH = (width * 100) / 120;
-  // แถวหน้าสุดต้องลอยเหนือราวสะพานด้านล่าง (เว้นไว้ 16px) ไม่ให้จมหายไปหลังสะพาน
-  const laneY = Math.min(box.h * LANE_WATERLINE[lane], box.h - bridgeHeight(box.h) - 16);
+  const laneY = laneWaterY(box, lane);
   // ตำแหน่งบนเส้นทาง ณ ตอน mount (สูตรเดียวกับที่ใช้เลือกจุดตกไม่ให้ซ้อนกัน)
   const dist = pathPos(xOf(k), k.createdAt, lane, box.w, mountedAt);
 
@@ -91,6 +96,7 @@ export default function River({
   collectingId = null,
   onKidBend,
   onKidFinish,
+  luckyDraw = null,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const onSceneBottomRef = useRef(onSceneBottom);
@@ -198,29 +204,6 @@ export default function River({
                   </div>
                 </button>
               ))}
-
-            {/* เด็กเก็บเหรียญ: อยู่ชั้นเดียวกับกระทงแถวนี้ (หน้ากระทง หลังคลื่นแถวหน้า) ลอยไปพร้อมกระทง */}
-            {box &&
-              items
-                .filter((it) => it.lane === lane && it.k.id === collectingId)
-                .map(({ k, key }) => {
-                  if (kidStart.current?.key !== key) kidStart.current = { key, at: Date.now() };
-                  const kl = layout(k, lane as Lane, box, kidStart.current.at);
-                  return (
-                    <div
-                      key={`kid-${key}`}
-                      data-kid-for={k.id}
-                      className="pointer-events-none absolute left-0 animate-drift"
-                      style={{ ...kl.float, top: kl.top, width: kl.width, height: kl.iconH }}
-                    >
-                      <CoinKid
-                        krathongW={kl.width}
-                        onBend={() => onKidBend?.(k.id)}
-                        onFinish={() => onKidFinish?.(k.id)}
-                      />
-                    </div>
-                  );
-                })}
           </Fragment>
         ))}
 
@@ -253,6 +236,44 @@ export default function River({
             </span>
           </div>
         ))}
+
+        {/*
+         * เด็กเก็บเหรียญ: อยู่เหนือกระทง คลื่น สะพาน และป้ายชื่อทุกแถว ให้เห็นเต็มตัวตอนโผล่สุด
+         * (ส่วนใต้แนวน้ำถูกตัดทิ้งใน CoinKid จึงยังดูเหมือนโผล่จากน้ำ) / ลอยไปพร้อมกระทงเป้าหมาย
+         */}
+        {box &&
+          items
+            .filter((it) => it.k.id === collectingId)
+            .map(({ k, key, lane }) => {
+              if (kidStart.current?.key !== key) kidStart.current = { key, at: Date.now() };
+              const kl = layout(k, lane, box, kidStart.current.at);
+              return (
+                <div
+                  key={`kid-${key}`}
+                  data-kid-for={k.id}
+                  className="pointer-events-none absolute left-0 animate-drift"
+                  style={{ ...kl.float, top: kl.top, width: kl.width, height: kl.iconH }}
+                >
+                  <CoinKid krathongW={kl.width} onBend={() => onKidBend?.(k.id)} onFinish={() => onKidFinish?.(k.id)} />
+                </div>
+              );
+            })}
+
+        {/*
+         * เจ้าแม่คงคา: ชั้นบนสุดของแม่น้ำ เหนือกระทง สะพาน ป้ายชื่อ เด็กเก็บเหรียญ (และปุ่ม/ตัวนับด้านบนที่อยู่ก่อนใน DOM)
+         * modal และแจ้งเตือนอยู่ใน top layer จึงอยู่เหนือเจ้าแม่เสมอ / ฐานคลื่นของภาพอยู่ที่ผิวน้ำแถวกลาง
+         */}
+        {box && luckyDraw && (
+          <RiverGoddess
+            key={`goddess-${luckyDraw.winner.id}-${luckyDraw.epoch}-${box.w}x${box.h}`}
+            winner={luckyDraw.winner}
+            drawnAtLocal={luckyDraw.drawnAtLocal}
+            holdSeconds={luckyDraw.holdSeconds}
+            riverW={box.w}
+            riverTop={box.top}
+            waterY={laneWaterY(box, 1)}
+          />
+        )}
 
         {/*
          * บับเบิลคำอธิษฐาน: วาดไว้ล่วงหน้าทุกใบ (ซ่อนอยู่) ด้วยค่า animation ชุดเดียวกับกระทง

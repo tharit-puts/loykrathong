@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { SAMPLE_KRATHONGS } from '../data/samples';
-import { MAX_VISIBLE, pickLanding } from '../lib/riverLayout';
+import { kidCenterX, KID_DURATION_MS } from '../components/CoinKid';
+import { notifyCoinCollected, notifyKrathongCreated } from '../components/Notifications';
+import { MAX_VISIBLE, lanePath, laneOf, pathPos, pickLanding, xOf } from '../lib/riverLayout';
 import { serverToLocal } from '../lib/serverClock';
 import {
   createKrathong,
@@ -23,7 +24,11 @@ const REFRESH_MS = 30_000;
  */
 const PENDING_MS = 30_000;
 /** กันค้าง: ถ้าแอนิเมชันเด็กไม่จบภายในเวลานี้ (เช่น กระทงหลุดจากแม่น้ำระหว่างเล่น) ให้เลิกเล่นเอง */
-const KID_MAX_MS = 5_000;
+const KID_MAX_MS = KID_DURATION_MS + 2_000;
+/** เด็กโผล่เมื่อกึ่งกลางตัวเด็กอยู่ห่างกึ่งกลางจอไม่เกินเท่านี้ (สัดส่วนความกว้างจอ) ตอนกลางแอนิเมชัน */
+const CENTER_ZONE = 0.1;
+/** ถ้าเด็กอีกคนกำลังเล่นอยู่ ลองใหม่ทุกเท่านี้ (ms) */
+const BUSY_RETRY_MS = 500;
 
 type Status = 'loading' | 'ready' | 'error';
 
@@ -34,22 +39,44 @@ export interface Collecting {
 }
 
 interface Options {
-  /** ตอนนี้เล่นแอนิเมชันเด็กได้ไหม (เช่น modal สร้างกระทงเปิดอยู่ → ไม่เล่น) — เช็ค document.hidden ให้แล้ว */
+  /** ตอนนี้เล่นแอนิเมชันเด็กได้ไหม (false = modal สร้างกระทงเปิดอยู่ → ข้ามแอนิเมชัน แต่ยังแจ้งเตือน) */
   canAnimate?: () => boolean;
+}
+
+const mod = (a: number, n: number) => ((a % n) + n) % n;
+
+/**
+ * อีกกี่ ms เด็กของกระทงใบนี้ถึงจะอยู่กลางจอ (นับจุดกึ่งกลางของแอนิเมชัน เด็กจึงเบี่ยงจากกลางจอเท่ากันทั้งตอนโผล่และตอนดำ)
+ * ใช้สูตรตำแหน่งเดียวกับ River (กระทงลอยไปทางขวา)
+ * - ยังไม่ถึงกลางจอ → รอจนตรงกลางพอดี
+ * - เพิ่งเลยกลางจอไปไม่เกิน CENTER_ZONE → เริ่มเลย (ถ้ารอ ต้องรอกระทงลอยวนกลับมาอีกรอบ)
+ * - เลยไปไกลกว่านั้น → รอรอบถัดไป
+ */
+function msUntilCentered(k: Krathong, now = Date.now()) {
+  const W = window.innerWidth;
+  const lane = laneOf(k);
+  const { width, start, travel, speed } = lanePath(W, lane);
+  const mid = now + KID_DURATION_MS / 2;
+  const kidCenter = start + pathPos(xOf(k), k.createdAt, lane, W, mid) + kidCenterX(width);
+  const past = kidCenter - W / 2;
+  if (past >= 0 && past <= CENTER_ZONE * W) return 0;
+  return (mod(-past, travel) / speed) * 1000;
 }
 
 /**
  * กระทงบนแม่น้ำ + จำนวนทั้งหมด จาก Supabase
  * - แม่น้ำแสดงกระทงใหม่สุด MAX_VISIBLE ใบ / ตัวนับนับจากฐานข้อมูลจริงเท่านั้น
- * - ฐานข้อมูลยังว่าง (หรือเชื่อมต่อไม่ได้) → แม่น้ำแสดงกระทงตัวอย่างแทน ไม่ให้โล่ง
- * - กระทงที่เพิ่งสร้างในเครื่องนี้ ใช้เวลาของเครื่องนี้เป็น createdAt (ไม่ใช่เวลาเซิร์ฟเวอร์)
- *   แอนิเมชันตกลงน้ำและระยะห่างที่ pickLanding คำนวณไว้จึงตรงเสมอ แม้นาฬิกาเครื่องจะคลาดจากเซิร์ฟเวอร์
- * - กระทงใหม่ของคนอื่น: ได้จาก realtime (INSERT) ทันที ใช้แถว/จุดตกที่ผู้สร้างสุ่มไว้ และเวลา server
- *   → ตกลงน้ำด้วยแอนิเมชันเดิม ทุกเครื่องเห็นตำแหน่ง/ระยะห่างเดียวกัน / กันซ้ำด้วย id ตัวนับไม่นับซ้ำ
+ * - ฐานข้อมูลยังว่าง (หรือเชื่อมต่อไม่ได้) → แม่น้ำว่าง (ไม่มีกระทงตัวอย่าง)
+ * - เวลา: createdAt ทุกใบใช้นาฬิกาเครื่องนี้ (สร้างเอง = เวลาเครื่อง / จาก server = แปลงด้วย serverClock)
+ * - กระทงใหม่ของคนอื่น: realtime (INSERT) ใช้แถว/จุดตกที่ผู้สร้างสุ่มไว้ ตกลงน้ำด้วยแอนิเมชันเดิม
+ *   กันซ้ำด้วย id ตัวนับไม่นับซ้ำ / แจ้งเตือน A ขึ้นทุกเครื่อง
  * - realtime หลุด: ดึงซ้ำทุก 30 วินาที + ตอนกลับมาที่แท็บ แล้ว merge เข้ากับของเดิมโดยไม่ซ้ำ id
- * - เด็กเก็บเหรียญ: server ตัดสิน (pg_cron) แล้วส่ง event realtime มา
- *   กระทงอยู่บนแม่น้ำ + แท็บเปิดอยู่ + ไม่มี modal → เล่นแอนิเมชัน (เหรียญหายตอนเด็กก้มสุด)
- *   นอกนั้น → ซ่อนเหรียญเงียบๆ ไม่คิวไว้เล่นทีหลัง / ตอนโหลดหน้า ใบที่ถูกเก็บแล้วไม่มีเหรียญตั้งแต่แรก
+ * - เด็กเก็บเหรียญ (server ตัดสินผ่าน pg_cron แล้วส่ง event realtime มา):
+ *   - แท็บซ่อนอยู่ → ซ่อนเหรียญเงียบๆ ไม่มีแอนิเมชันและไม่แจ้งเตือน
+ *   - modal สร้างกระทงเปิดอยู่ → ซ่อนเหรียญ ไม่มีแอนิเมชัน แต่แจ้งเตือน B ทันที
+ *   - กระทงไม่อยู่บนแม่น้ำ → แจ้งเตือน B ทันที
+ *   - นอกนั้น → เหรียญยังอยู่ รอให้กระทงลอยมาถึงกลางจอเอง แล้วเด็กโผล่ (ทีละคน) ก้มสุด = เหรียญหาย + แจ้งเตือน B
+ *   - โหลดหน้าใหม่: ใบที่ถูกเก็บแล้วไม่มีเหรียญตั้งแต่แรก ไม่เล่น/ไม่แจ้งเตือนย้อนหลัง
  */
 export function useKrathongs({ canAnimate }: Options = {}) {
   const [recent, setRecent] = useState<Krathong[]>([]);
@@ -58,6 +85,8 @@ export function useKrathongs({ canAnimate }: Options = {}) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [latestId, setLatestId] = useState<string | null>(null);
   const [collecting, setCollecting] = useState<Collecting | null>(null);
+  /** เหรียญที่ถูกเก็บแล้วแต่ยังแสดงไว้ (รอเด็กมาถึงกลางจอ / เด็กยังไม่ก้มสุด) */
+  const [heldCoins, setHeldCoins] = useState<ReadonlySet<string>>(() => new Set());
   /**
    * createdAt ตามนาฬิกาเครื่องนี้ของกระทงแต่ละใบ (id → ms) กำหนดครั้งเดียวตอนเห็นครั้งแรก แล้วใช้ค่าเดิมตลอด
    * - สร้างเอง: เวลาเครื่องตอนสร้าง / จากฐานข้อมูลหรือ realtime: created_at แปลงเป็นเวลาเครื่อง (serverClock)
@@ -80,6 +109,9 @@ export function useKrathongs({ canAnimate }: Options = {}) {
   const pendingSince = useRef(new Map<string, { at: number; serverCreatedAt: number }>());
   /** เคยโหลดจากฐานข้อมูลสำเร็จแล้วอย่างน้อยครั้งหนึ่ง */
   const loadedOnce = useRef(false);
+  /** คิวเด็ก: กระทงที่รอให้ลอยมาถึงกลางจอ (id → timer) และข้อมูลกระทงจาก event (ใช้แจ้งเตือน) */
+  const kidTimers = useRef(new Map<string, number>());
+  const kidTargets = useRef(new Map<string, Krathong>());
 
   const recentRef = useRef(recent);
   recentRef.current = recent;
@@ -133,6 +165,55 @@ export function useKrathongs({ canAnimate }: Options = {}) {
     };
   }, [refresh]);
 
+  /* ---------- คิวเด็กเก็บเหรียญ ---------- */
+
+  const releaseCoin = useCallback((id: string) => {
+    setHeldCoins((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  /** ข้อมูลกระทงล่าสุดสำหรับแจ้งเตือน (บนแม่น้ำ หรือจาก event) */
+  const targetOf = (id: string) => recentRef.current.find((k) => k.id === id) ?? kidTargets.current.get(id);
+
+  /** เลิกรอเด็ก: เหรียญหาย (+ แจ้งเตือนถ้า notify) */
+  const dropKid = useCallback(
+    (id: string, notify: boolean) => {
+      window.clearTimeout(kidTimers.current.get(id));
+      kidTimers.current.delete(id);
+      releaseCoin(id);
+      const k = targetOf(id);
+      kidTargets.current.delete(id);
+      if (notify && k) notifyCoinCollected(k);
+    },
+    [releaseCoin],
+  );
+
+  /** ตั้งเวลาให้เด็กโผล่ตอนกระทงลอยมาถึงกลางจอ */
+  const scheduleKidRef = useRef<(id: string) => void>(() => {});
+  const tryStartKid = (id: string) => {
+    kidTimers.current.delete(id);
+    const k = recentRef.current.find((p) => p.id === id);
+    if (!k) return dropKid(id, true); // หลุดจากแม่น้ำระหว่างรอ
+    if (document.hidden) return dropKid(id, false); // แท็บซ่อน: ข้ามทั้งแอนิเมชันและแจ้งเตือน
+    if (canAnimateRef.current && !canAnimateRef.current()) return dropKid(id, true); // modal เปิด: แจ้งเตือนอย่างเดียว
+    if (collectingRef.current) {
+      // เด็กอีกคนกำลังเล่น: รอให้จบ แล้วเช็คใหม่ว่ายังอยู่กลางจอไหม (ไม่อยู่ = รอรอบถัดไป)
+      kidTimers.current.set(id, window.setTimeout(() => scheduleKidRef.current(id), BUSY_RETRY_MS));
+      return;
+    }
+    if (msUntilCentered(k) > 0) return scheduleKidRef.current(id); // ย่อ/ขยายจอระหว่างรอ → คำนวณใหม่
+    setCollecting({ id, bent: false });
+  };
+  scheduleKidRef.current = (id: string) => {
+    const k = recentRef.current.find((p) => p.id === id);
+    if (!k) return dropKid(id, true);
+    kidTimers.current.set(id, window.setTimeout(() => tryStartKid(id), msUntilCentered(k)));
+  };
+
   // event จาก server (realtime): กระทงใหม่ / เด็กเก็บเหรียญ — channel เดียว ถอดตอน unmount
   useEffect(() => {
     const onInsert = (k: Krathong) => {
@@ -145,50 +226,79 @@ export function useKrathongs({ canAnimate }: Options = {}) {
       const local = toLocalTimeRef.current(k);
       setRecent((prev) => [...prev.filter((p) => p.id !== k.id), local].slice(-MAX_VISIBLE));
       setCount((c) => (c === null ? c : c + 1));
+      notifyKrathongCreated(local);
     };
 
-    const onCollected = (id: string) => {
-      const target = recentRef.current.find((k) => k.id === id);
-      // ไม่อยู่บนแม่น้ำ หรือถูกเก็บไปแล้วในเครื่องนี้ → ไม่ต้องทำอะไร (poll รอบหน้าจะได้ค่าล่าสุดเอง)
-      if (!target || target.coinCollected) return;
+    const onCollected = (k: Krathong) => {
+      const id = k.id;
+      if (kidTimers.current.has(id) || kidTargets.current.has(id) || collectingRef.current?.id === id) return; // ซ้ำ
+      const target = recentRef.current.find((p) => p.id === id);
+      if (target?.coinCollected) return; // ถูกเก็บไปแล้วในเครื่องนี้
+      if (document.hidden) {
+        // แท็บซ่อน: ซ่อนเหรียญเงียบๆ
+        if (target) setRecent((prev) => prev.map((p) => (p.id === id ? { ...p, coinCollected: true } : p)));
+        return;
+      }
+      if (!target) return notifyCoinCollected(k); // ไม่อยู่บนแม่น้ำ: แจ้งเตือนอย่างเดียว
 
-      setRecent((prev) => prev.map((k) => (k.id === id ? { ...k, coinCollected: true } : k)));
-      const animate =
-        !document.hidden && !collectingRef.current && (canAnimateRef.current ? canAnimateRef.current() : true);
-      if (animate) setCollecting({ id, bent: false });
+      setRecent((prev) => prev.map((p) => (p.id === id ? { ...p, coinCollected: true } : p)));
+      if (canAnimateRef.current && !canAnimateRef.current()) return notifyCoinCollected(target); // modal เปิด
+      // เล่นแอนิเมชัน: แสดงเหรียญไว้ก่อน รอกระทงลอยมาถึงกลางจอ
+      kidTargets.current.set(id, target);
+      setHeldCoins((prev) => new Set(prev).add(id));
+      scheduleKidRef.current(id);
     };
-    // dev เท่านั้น (ตัดทิ้งตอน build): จำลอง event จาก server เพื่อทดสอบแอนิเมชันโดยไม่ต้องรอ cron
-    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__lkSimulateCoinCollected = onCollected;
-    return subscribeKrathongChanges({ onInsert, onCoinCollected: onCollected });
-  }, []);
+
+    // dev เท่านั้น (ตัดทิ้งตอน build): จำลอง event จาก server เพื่อทดสอบโดยไม่ต้องรอ cron
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__lkSimulateCoinCollected = (id: string) => {
+        const k = recentRef.current.find((p) => p.id === id);
+        onCollected(k ?? { id, name: '?', wish: '', type: 'leaf', decorations: ['coin'], createdAt: Date.now() });
+      };
+      (window as unknown as Record<string, unknown>).__lkMsUntilCentered = (id: string) => {
+        const k = recentRef.current.find((p) => p.id === id);
+        return k ? msUntilCentered(k) : null;
+      };
+    }
+    const unsubscribe = subscribeKrathongChanges({ onInsert, onCoinCollected: onCollected });
+    const timers = kidTimers.current;
+    return () => {
+      unsubscribe();
+      for (const t of timers.values()) window.clearTimeout(t);
+      timers.clear();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // กันค้าง: เลิกเล่นเองถ้าเด็กไม่เรียก onFinish (เช่น กระทงหลุดจากแม่น้ำ / ย่อจอแล้ว remount)
   const collectingId = collecting?.id;
   useEffect(() => {
     if (!collectingId) return;
-    const t = window.setTimeout(() => setCollecting((c) => (c?.id === collectingId ? null : c)), KID_MAX_MS);
+    const t = window.setTimeout(() => {
+      setCollecting((c) => (c?.id === collectingId ? null : c));
+      dropKid(collectingId, false);
+    }, KID_MAX_MS);
     return () => window.clearTimeout(t);
-  }, [collectingId]);
+  }, [collectingId, dropKid]);
 
-  /** เด็กก้มสุด → ซ่อนเหรียญบนกระทง */
-  const onKidBend = useCallback((id: string) => {
-    setCollecting((c) => (c?.id === id ? { ...c, bent: true } : c));
-  }, []);
+  /** เด็กก้มสุด → ซ่อนเหรียญบนกระทง + แจ้งเตือน B */
+  const onKidBend = useCallback(
+    (id: string) => {
+      setCollecting((c) => (c?.id === id ? { ...c, bent: true } : c));
+      dropKid(id, true);
+    },
+    [dropKid],
+  );
   /** เด็กดำน้ำหายแล้ว */
   const onKidFinish = useCallback((id: string) => {
     setCollecting((c) => (c?.id === id ? null : c));
   }, []);
 
-  const showSamples = status === 'error' || (status === 'ready' && recent.length === 0);
-  const all = useMemo(() => {
-    const list = showSamples ? SAMPLE_KRATHONGS : recent;
-    // เหรียญที่ถูกเก็บแล้วไม่แสดง ยกเว้นใบที่เด็กกำลังจะหยิบ (แสดงไว้จนเด็กก้มสุด)
-    return list.map((k) => {
-      if (!k.coinCollected) return k;
-      const hold = collecting?.id === k.id && !collecting.bent;
-      return { ...k, decorations: shownDecorations(k, hold) };
-    });
-  }, [showSamples, recent, collecting]);
+  const all = useMemo(
+    () =>
+      // เหรียญที่ถูกเก็บแล้วไม่แสดง ยกเว้นใบที่เด็กกำลังจะหยิบ (แสดงไว้จนเด็กก้มสุด)
+      recent.map((k) => (k.coinCollected ? { ...k, decorations: shownDecorations(k, heldCoins.has(k.id)) } : k)),
+    [recent, heldCoins],
+  );
   const allRef = useRef(all);
   allRef.current = all;
 
@@ -229,6 +339,8 @@ export function useKrathongs({ canAnimate }: Options = {}) {
     setStatus('ready');
     setLoadError(null);
     setLatestId(k.id);
+    // แจ้งเตือน A หลังบันทึกสำเร็จเท่านั้น (id เดียวกับที่ realtime ใช้ จึงไม่ขึ้นซ้ำ)
+    notifyKrathongCreated(k);
     return k;
   }, []);
 

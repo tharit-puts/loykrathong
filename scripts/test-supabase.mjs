@@ -151,8 +151,44 @@ console.log('\n4b) เด็กเก็บเหรียญ: ผู้ใช�
     (upd.error || !upd.data?.length ? pass : fail)(`UPDATE coin_collected_at → ${upd.error ? `ปฏิเสธ (${upd.error.code})` : `${upd.data.length} แถว`}`);
   }
 
+  const cfg = await sb.from('coin_collector_config').select('*');
+  (cfg.error || !cfg.data?.length ? pass : fail)(`อ่าน coin_collector_config → ${cfg.error ? `ปฏิเสธ (${cfg.error.code})` : `${cfg.data.length} แถว`}`);
+  const cfgUpd = await sb.from('coin_collector_config').update({ chance: 1 }).eq('id', true).select('*');
+  (cfgUpd.error || !cfgUpd.data?.length ? pass : fail)(`แก้ coin_collector_config → ${cfgUpd.error ? `ปฏิเสธ (${cfgUpd.error.code})` : 'แก้ได้!'}`);
+
   const state = await sb.from('coin_collector_state').select('*');
   (state.error || !state.data?.length ? pass : fail)(`อ่าน coin_collector_state → ${state.error ? `ปฏิเสธ (${state.error.code})` : `${state.data.length} แถว`}`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n4c) เจ้าแม่คงคา (lucky draw): anon อ่านสถานะได้อย่างเดียว (ต้องรัน migration lucky_draw ก่อน)');
+{
+  const st = await sb.rpc('get_lucky_draw_state');
+  (st.error ? fail : pass)(`เรียก get_lucky_draw_state ได้ → ${st.error ? `${st.error.code} ${st.error.message} (ยังไม่ได้รัน migration?)` : `server_now ${st.data?.server_now ? 'มี' : 'ไม่มี'}, hold ${st.data?.hold_seconds} วิ`}`);
+  if (st.data?.krathong) (st.data.krathong.wish === undefined ? pass : fail)('ไม่ส่งคำอธิษฐานของผู้ชนะ');
+
+  const run = await sb.rpc('run_lucky_draw');
+  (run.error ? pass : fail)(`anon เรียก run_lucky_draw → ${run.error ? `ปฏิเสธ (${run.error.code})` : 'ทำงานได้!'}`);
+  const runRest = await fetch(`${url}/rest/v1/rpc/run_lucky_draw`, {
+    method: 'POST',
+    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  (!runRest.ok ? pass : fail)(`anon เรียก run_lucky_draw ผ่าน REST ตรง → HTTP ${runRest.status}`);
+
+  const anyKrathong = created[0]?.id;
+  const ins = await sb.from('lucky_draws').insert({ krathong_id: anyKrathong }).select('id');
+  (ins.error ? pass : fail)(`INSERT lucky_draws → ${ins.error ? `ปฏิเสธ (${ins.error.code})` : 'บันทึกได้!'}`);
+  const upd = await sb.from('lucky_draws').update({ drawn_at: new Date().toISOString() }).neq('id', '00000000-0000-0000-0000-000000000000').select('id');
+  (upd.error || !upd.data?.length ? pass : fail)(`UPDATE lucky_draws → ${upd.error ? `ปฏิเสธ (${upd.error.code})` : `${upd.data.length} แถว`}`);
+  const del = await sb.from('lucky_draws').delete().neq('id', '00000000-0000-0000-0000-000000000000').select('id');
+  (del.error || !del.data?.length ? pass : fail)(`DELETE lucky_draws → ${del.error ? `ปฏิเสธ (${del.error.code})` : `${del.data.length} แถว`}`);
+  const read = await sb.from('lucky_draws').select('id');
+  (read.error ? fail : pass)(`อ่าน lucky_draws ได้ (ใช้แสดงผล) → ${read.error ? read.error.message : `${read.data.length} แถว`}`);
+  const cfg = await sb.from('lucky_draw_config').select('*');
+  (cfg.error || !cfg.data?.length ? pass : fail)(`อ่าน lucky_draw_config → ${cfg.error ? `ปฏิเสธ (${cfg.error.code})` : `${cfg.data.length} แถว`}`);
+  const cfgUpd = await sb.from('lucky_draw_config').update({ enabled: true }).eq('id', 1).select('*');
+  (cfgUpd.error || !cfgUpd.data?.length ? pass : fail)(`เปิดกิจกรรมเองผ่าน lucky_draw_config → ${cfgUpd.error ? `ปฏิเสธ (${cfgUpd.error.code})` : 'เปิดได้!'}`);
 }
 
 // ---------------------------------------------------------------------------

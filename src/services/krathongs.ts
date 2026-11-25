@@ -36,7 +36,7 @@ function db() {
 
 const COLUMNS = 'id, created_at, name, wish, krathong_type, decorations, lane, landing_x, coin_collected_at';
 
-function fromRow(r: KrathongRow): Krathong {
+export function fromRow(r: KrathongRow): Krathong {
   return {
     id: r.id,
     createdAt: Date.parse(r.created_at),
@@ -109,12 +109,14 @@ export async function getKrathongCount(): Promise<number> {
 export interface KrathongRealtimeHandlers {
   /** มีกระทงใหม่ในฐานข้อมูล (ของใครก็ได้ รวมของเครื่องนี้เอง: ฝั่งที่รับต้องกันซ้ำด้วย id) */
   onInsert: (krathong: Krathong) => void;
-  /** เด็กเก็บเหรียญจากกระทงใบนี้ (server ตั้ง coin_collected_at ผ่าน pg_cron) */
-  onCoinCollected: (krathongId: string) => void;
+  /** เด็กเก็บเหรียญจากกระทงใบนี้ (server ตั้ง coin_collected_at ผ่าน pg_cron) — ส่งข้อมูลทั้งแถวมาด้วย ใช้แสดงแจ้งเตือนได้แม้กระทงไม่อยู่บนแม่น้ำ */
+  onCoinCollected: (krathong: Krathong) => void;
 }
 
 /** เลขกำกับชื่อ channel ให้ไม่ซ้ำกันในแต่ละครั้งที่ subscribe */
 let channelSeq = 0;
+/** ชื่อ channel ไม่ซ้ำ (ใช้ร่วมกับ services อื่น) */
+export const uniqueChannelName = (prefix: string) => `${prefix}-${++channelSeq}-${Math.random().toString(36).slice(2, 8)}`;
 
 /**
  * ฟังการเปลี่ยนแปลงของตาราง krathongs แบบ realtime ใน channel เดียว:
@@ -142,8 +144,8 @@ export function subscribeKrathongChanges({ onInsert, onCoinCollected }: Krathong
       if (row?.id) onInsert(fromRow(row));
     })
     .on<KrathongRow>('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'krathongs' }, (payload) => {
-      const row = payload.new as Partial<KrathongRow>;
-      if (row.id && row.coin_collected_at) onCoinCollected(row.id);
+      const row = payload.new as KrathongRow;
+      if (row?.id && row.coin_collected_at) onCoinCollected(fromRow(row));
     })
     .subscribe();
   return () => {
