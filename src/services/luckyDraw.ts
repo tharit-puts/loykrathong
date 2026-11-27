@@ -12,6 +12,8 @@ export interface LuckyDrawState {
   /** นาฬิกาเครื่องนี้ − นาฬิกา server (ms) วัดจากคำขอนี้ */
   offsetMs: number;
   holdSeconds: number;
+  /** id ของการจับ (ใช้จำว่าผู้ใช้ปิดเจ้าแม่ของรอบนี้แล้ว) */
+  drawId: string | null;
   /** เวลาที่จับ (ms ตามนาฬิกา server) หรือ null ถ้ายังไม่จับ */
   drawnAtServer: number | null;
   /** กระทงผู้ชนะ (สถานะเหรียญ = ณ ตอนจับ) */
@@ -40,7 +42,7 @@ export async function fetchLuckyDrawState(): Promise<LuckyDrawState> {
     const collectedAt = s.krathong.coin_collected_at ? Date.parse(s.krathong.coin_collected_at) : null;
     winner = { ...k, coinCollected: collectedAt !== null && collectedAt <= drawnAtServer };
   }
-  return { offsetMs, holdSeconds: s.hold_seconds, drawnAtServer, winner };
+  return { offsetMs, holdSeconds: s.hold_seconds, drawId: s.draw_id ?? null, drawnAtServer, winner };
 }
 
 /** ฟังการเปลี่ยนแปลงของ lucky_draws (จับ / แอดมินลบผลเพื่อรีเซ็ต) → เรียก onChange ให้ไปอ่านสถานะใหม่ */

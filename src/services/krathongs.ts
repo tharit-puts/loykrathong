@@ -14,7 +14,7 @@ const TYPE_TO_DB: Record<KrathongType, DbKrathongType> = {
   bread: 'bread',
   invisible: 'invisible',
 };
-const DECO_TO_DB: Record<Decoration, DbDecoration> = { flowers: 'flowers', coin: 'coin10', nail: 'nail' };
+const DECO_TO_DB: Record<Decoration, DbDecoration> = { flowers: 'flowers', coin: 'coin10', nail: 'nail', rice: 'khao_tok' };
 
 const invert = <K extends string, V extends string>(m: Record<K, V>) =>
   Object.fromEntries(Object.entries(m).map(([k, v]) => [v, k])) as Record<V, K>;

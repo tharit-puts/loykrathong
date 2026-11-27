@@ -51,6 +51,18 @@
     }
   }
 
+  /* ไอคอนเจ้าแม่ (ปิดไว้ระหว่างเหตุการณ์): แสงเรืองเต้นช้าๆ คาบ 3.2 วินาที ไม่กะพริบ */
+  --animate-goddess-attn: goddess-attn 1.6s ease-in-out infinite alternate;
+
+  @keyframes goddess-attn {
+    from {
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(255, 223, 138, 0.2);
+    }
+    to {
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 16px 6px rgba(255, 223, 138, 0.85);
+    }
+  }
+
   @keyframes firework {
     0% {
       transform: scale(0.2);

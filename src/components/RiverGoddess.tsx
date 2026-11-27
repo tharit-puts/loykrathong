@@ -9,12 +9,16 @@ import { shownDecorations, type Krathong } from '../types';
  *
  * แอนิเมชันทั้งฉากเป็นเส้นเวลาเดียว (Web Animations API) ตั้ง currentTime = เวลาที่ผ่านไปตั้งแต่จับ
  * เข้ามากลางเหตุการณ์/รีเฟรช จึงเล่นต่อจากจุดที่ควรเป็นพอดี (ช่วงค้าง: fade-in 0.5 วินาที ไม่เล่นช่วงผุดซ้ำ)
- * ใช้แค่ transform / opacity / clip-path (ไม่มี blur filter) ค้าง 5 นาทีบนมือถือได้ไม่หนักเครื่อง
- * ทั้งฉาก pointer-events: none → กดปุ่มที่อยู่ใต้เจ้าแม่ได้ตลอด
+ * ใช้แค่ transform / opacity / clip-path (ไม่มี blur filter) ค้างนานบนมือถือได้ไม่หนักเครื่อง
+ *
+ * ปิดได้ (เฉพาะเครื่องนี้): แตะ/คลิกที่ใดก็ได้ (ชั้นใสเต็มจอรับคลิกไว้ ไม่ทะลุไปโดนปุ่มข้างล่าง) หรือกด Esc
+ * → จางออก 0.5 วินาทีแล้ว unmount (หยุดแอนิเมชันวนซ้ำทั้งหมด) — modal / แจ้งเตือน / ไอคอนเจ้าแม่ อยู่เหนือชั้นนี้
  */
 
 /** ความยาวแต่ละช่วง (ms) — แก้ตรงนี้ที่เดียว */
 export const GODDESS_PHASES = {
+  /** 0. รอให้แอนิเมชันกระทงใบล่าสุดตกลงน้ำจบก่อน (ยังไม่มีอะไรบนจอ) */
+  leadIn: 2000,
   /** 1. แสงสว่างขึ้นจากผิวน้ำ + หรี่ฉาก */
   glow: 2000,
   /** 2. เจ้าแม่ผุดขึ้นจากน้ำ (ease-out) */
@@ -23,18 +27,28 @@ export const GODDESS_PHASES = {
   krathong: 1500,
   /** 4. (ต้นช่วงค้าง) คืนความสว่างฉาก */
   restore: 1000,
-  /** เข้ามากลางช่วงค้าง: ค่อยๆ ปรากฏ */
+  /** เข้ามากลางช่วงค้าง / กดดูซ้ำ: ค่อยๆ ปรากฏ */
   joinFadeIn: 500,
+  /** คำใบ้ "แตะที่ใดก็ได้เพื่อปิด" แสดงช่วงแรกของช่วงค้าง */
+  closeHint: 5000,
+  /** ผู้ใช้ปิดเอง: จางออก */
+  dismiss: 500,
   /** 5. จางหาย */
   fade: 4000,
 } as const;
-/** ช่วงโผล่ทั้งหมด (7 วินาที) */
-export const GODDESS_APPEAR_MS = GODDESS_PHASES.glow + GODDESS_PHASES.rise + GODDESS_PHASES.krathong;
+/** ช่วงโผล่ทั้งหมด (9 วินาที: lead-in 2 + แสง 2 + ผุด 3.5 + กระทงลอยมา 1.5) */
+export const GODDESS_APPEAR_MS = GODDESS_PHASES.leadIn + GODDESS_PHASES.glow + GODDESS_PHASES.rise + GODDESS_PHASES.krathong;
+/**
+ * กดดูซ้ำหลังเหตุการณ์จบ: ค้างไว้จนกว่าผู้ใช้จะปิดเอง (แตะ/Esc/กดไอคอน)
+ * (เส้นเวลาของแอนิเมชันต้องมีความยาวจำกัด จึงตั้ง 24 ชั่วโมง = ไม่หมดเวลาในทางปฏิบัติ)
+ */
+export const REPLAY_SECONDS = 24 * 60 * 60;
 /** ความยาวทั้งเหตุการณ์ (ms) */
 export const goddessTotalMs = (holdSeconds: number) => GODDESS_APPEAR_MS + holdSeconds * 1000 + GODDESS_PHASES.fade;
 
 /** ข้อความบนป้าย (ปรับได้ตามที่เจ้าของงานกำหนด) */
 const ANNOUNCE_TITLE = 'ผู้โชคดีได้รับพรจากเจ้าแม่คงคา';
+const CLOSE_HINT = 'แตะที่ใดก็ได้เพื่อปิด';
 /** หรี่ฉากอื่นลงเท่านี้ ระหว่างแสงขึ้นและผุด */
 const DIM = 0.35;
 
@@ -70,12 +84,26 @@ interface Props {
   riverW: number;
   riverTop: number;
   waterY: number;
+  /** ผู้ใช้สั่งปิด (แตะ/คลิก/Esc) — ฉากจะจางออกเอง แล้วเรียก onClosed */
+  closing: boolean;
+  onDismiss: () => void;
+  onClosed: () => void;
 }
 
 const CLIP_ON = 'inset(-60% -60% 0% -60%)';
 const CLIP_OFF = 'inset(-60% -60% -60% -60%)';
 
-export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW, riverTop, waterY }: Props) {
+export default function RiverGoddess({
+  winner,
+  drawnAtLocal,
+  holdSeconds,
+  riverW,
+  riverTop,
+  waterY,
+  closing,
+  onDismiss,
+  onClosed,
+}: Props) {
   /** เวลาที่ผ่านไปตั้งแต่จับ ณ ตอนเริ่มแสดงฉากนี้ (คงที่ตลอดอายุ component) */
   const [startElapsed] = useState(() => Math.max(0, Date.now() - drawnAtLocal));
   const reduced = useMemo(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches, []);
@@ -110,10 +138,13 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
   const krathongBobRef = useRef<HTMLDivElement>(null);
   const sparkleRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const ribbonRef = useRef<HTMLDivElement>(null);
+  const hintRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
     const P = GODDESS_PHASES;
     const A = GODDESS_APPEAR_MS;
+    const L = P.leadIn;
+    const glowEnd = L + P.glow;
     const holdEnd = A + holdSeconds * 1000;
     const T = holdEnd + P.fade;
     const o = (ms: number) => Math.min(1, Math.max(0, ms / T));
@@ -144,7 +175,8 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
     // หรี่ฉาก → คืนความสว่างใน 1 วินาทีแรกของช่วงค้าง (ไม่หรี่ตลอด 5 นาที)
     timeline(dimRef.current, [
       { offset: 0, opacity: 0 },
-      { offset: o(P.glow), opacity: DIM },
+      { offset: o(L), opacity: 0 },
+      { offset: o(glowEnd), opacity: DIM },
       { offset: o(A), opacity: DIM },
       { offset: o(A + P.restore), opacity: 0 },
       { offset: 1, opacity: 0 },
@@ -152,7 +184,8 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
     // แสงจากผิวน้ำ: สว่างขึ้น → เหลือแสงเรืองรอบตัว
     timeline(glowRef.current, [
       { offset: 0, opacity: 0 },
-      { offset: o(P.glow), opacity: 1 },
+      { offset: o(L), opacity: 0 },
+      { offset: o(glowEnd), opacity: 1 },
       { offset: o(A), opacity: 1 },
       { offset: o(A + P.restore), opacity: 0.7 },
       { offset: 1, opacity: 0.7 },
@@ -163,7 +196,7 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
       reduced
         ? [
             { offset: 0, opacity: 0 },
-            { offset: o(P.glow), opacity: 0 },
+            { offset: o(glowEnd), opacity: 0 },
             { offset: o(A), opacity: 1 },
             { offset: o(holdEnd), opacity: 1 },
             { offset: 1, opacity: 0 },
@@ -181,9 +214,18 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
       { offset: o(A + 500), opacity: 1 },
       { offset: 1, opacity: 1 },
     ]);
+    // คำใบ้ปิด: ช่วงแรกของช่วงค้างแล้วจางหาย
+    timeline(hintRef.current, [
+      { offset: 0, opacity: 0 },
+      { offset: o(A + 300), opacity: 0 },
+      { offset: o(A + 800), opacity: 0.85 },
+      { offset: o(A + P.closeHint), opacity: 0.85 },
+      { offset: o(A + P.closeHint + 600), opacity: 0 },
+      { offset: 1, opacity: 0 },
+    ]);
 
     if (!reduced) {
-      const riseEnd = P.glow + P.rise;
+      const riseEnd = glowEnd + P.rise;
       // ผุดขึ้นจากน้ำ: ตัดภาพใต้แนวผิวน้ำ (clip-path) แล้วเลิกตัดเมื่อผุดเสร็จ
       timeline(clipRef.current, [
         { offset: 0, clipPath: CLIP_ON, easing: 'steps(1, end)' },
@@ -192,7 +234,7 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
       ]);
       timeline(riseRef.current, [
         { offset: 0, transform: `translateY(${geo.h + 8}px)` },
-        { offset: o(P.glow), transform: `translateY(${geo.h + 8}px)`, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+        { offset: o(glowEnd), transform: `translateY(${geo.h + 8}px)`, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
         { offset: o(riseEnd), transform: 'translateY(0px)' },
         { offset: 1, transform: 'translateY(0px)' },
       ]);
@@ -238,12 +280,54 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
     };
   }, [startElapsed, holdSeconds, reduced, geo.h, geo.kW]);
 
+  // Esc = ปิด (ถ้ามี dialog เปิดอยู่ ให้ Esc ไปปิด dialog แทน ไม่ปิดเจ้าแม่)
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+      onDismissRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ปิด: จางออก 0.5 วินาที แล้วแจ้งให้ถอดฉากออก (แอนิเมชันวนซ้ำทั้งหมดหยุดตอน unmount)
+  const onClosedRef = useRef(onClosed);
+  onClosedRef.current = onClosed;
+  useEffect(() => {
+    if (!closing) return;
+    const el = rootRef.current;
+    const a = el?.animate([{ opacity: getComputedStyle(el).opacity }, { opacity: 0 }], { duration: GODDESS_PHASES.dismiss, fill: 'forwards' });
+    const t = window.setTimeout(() => onClosedRef.current(), GODDESS_PHASES.dismiss);
+    return () => {
+      window.clearTimeout(t);
+      a?.cancel();
+    };
+  }, [closing]);
+
   const krathong = { ...winner, decorations: shownDecorations(winner) };
 
   return (
     <div ref={rootRef} data-goddess={winner.id} className="pointer-events-none absolute inset-0">
       {/* หรี่ฉากอื่น (ทั้งจอ) */}
       <div ref={dimRef} className="fixed inset-0 bg-[#020818] opacity-0" />
+
+      {/*
+       * ชั้นใสเต็มจอรับคลิก/แตะ = ปิดเจ้าแม่ (คลิกนี้ไม่ทะลุไปโดนปุ่มข้างล่าง)
+       * z-30: เหนือ navbar (z-20) และทั้งหน้า / ใต้ไอคอนเจ้าแม่ (z-40) / modal และแจ้งเตือนอยู่ใน top layer เหนือกว่าเสมอ
+       * กำลังปิด → ไม่รับคลิกแล้ว
+       */}
+      <div
+        data-goddess-overlay
+        aria-hidden="true"
+        className={`fixed inset-0 z-30 ${closing ? 'pointer-events-none' : 'pointer-events-auto cursor-pointer'}`}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDismiss();
+        }}
+      />
 
       <div ref={contentRef} className="absolute inset-0">
         {/* แสงจากผิวน้ำ / แสงเรืองรอบตัว (radial gradient ไม่ใช้ blur) */}
@@ -319,6 +403,13 @@ export default function RiverGoddess({ winner, drawnAtLocal, holdSeconds, riverW
               )}
             </div>
           </div>
+          {/* คำใบ้ว่าปิดได้ (ช่วงแรกของช่วงค้าง) */}
+          <p
+            ref={hintRef}
+            className="mt-1.5 text-center text-[13px] text-white opacity-0 [text-shadow:0_1px_3px_rgba(0,0,0,0.8)]"
+          >
+            {CLOSE_HINT}
+          </p>
         </div>
       </div>
     </div>

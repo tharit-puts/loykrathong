@@ -12,6 +12,7 @@ import WelcomePopup from './components/WelcomePopup';
 import WishesModal from './components/WishesModal';
 import { useKrathongs } from './hooks/useKrathongs';
 import { useLuckyDraw } from './hooks/useLuckyDraw';
+import GoddessIcon from './components/GoddessIcon';
 import type { ModalName, NewKrathong } from './types';
 
 export default function App() {
@@ -53,7 +54,7 @@ export default function App() {
               src={scene}
               alt=""
               draggable={false}
-              className="pointer-events-none absolute inset-x-0 top-0 h-full w-full object-cover saturate-[0.9] brightness-95 select-none mobile-portrait:object-[50%_12%]"
+              className="pointer-events-none absolute inset-x-0 top-0 h-full w-full object-cover object-[50%_30%] saturate-[0.9] brightness-95 select-none mobile-portrait:object-[50%_12%]"
               style={sceneBottom ? { height: sceneBottom } : undefined}
             />
           </picture>
@@ -75,7 +76,9 @@ export default function App() {
             collectingId={collecting?.id ?? null}
             onKidBend={onKidBend}
             onKidFinish={onKidFinish}
-            luckyDraw={luckyDraw}
+            goddess={luckyDraw.scene}
+            onGoddessDismiss={luckyDraw.dismiss}
+            onGoddessClosed={luckyDraw.onClosed}
           />
 
           {/* เชื่อมต่อฐานข้อมูลไม่ได้: แจ้งแบบสุภาพ หน้าเว็บยังใช้ได้ */}
@@ -100,6 +103,10 @@ export default function App() {
       <CreateKrathongWizard open={modal === 'create'} onClose={closeModal} onSubmit={handleCreate} />
       <WishesModal open={modal === 'wishes'} onClose={closeModal} />
       {/* popup ต้อนรับ: ขึ้นเฉพาะครั้งแรกที่เข้าเว็บ */}
+      {/* ไอคอนเจ้าแม่คงคา (มุมขวาบน): แสดงตั้งแต่มีผู้โชคดี กดเปิด/ปิดฉากประกาศ */}
+      {luckyDraw.icon.visible && (
+        <GoddessIcon pressed={luckyDraw.icon.pressed} attention={luckyDraw.icon.attention} onClick={luckyDraw.toggle} />
+      )}
       <WelcomePopup />
       {/* แจ้งเตือน (toast) ตัวเดียวของทั้งเว็บ: อยู่เหนือ popup และหน้าต่างสร้างกระทงเสมอ */}
       <NotificationsHost />

@@ -45,6 +45,8 @@ const valid = [
   { krathong_type: 'ice', decorations: ['flowers'] },
   { krathong_type: 'bread', decorations: ['coin10', 'nail'] },
   { krathong_type: 'invisible', decorations: ['flowers', 'coin10', 'nail'] },
+  { krathong_type: 'banana_leaf', decorations: ['khao_tok'] },
+  { krathong_type: 'ice', decorations: ['flowers', 'coin10', 'nail', 'khao_tok'] },
 ];
 const created = [];
 for (const [i, v] of valid.entries()) {

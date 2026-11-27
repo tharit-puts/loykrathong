@@ -16,6 +16,7 @@
 | `supabase/migrations/20261124_coin_collector.sql` | เด็กเก็บเหรียญ: คอลัมน์ `coin_collected_at`, ฟังก์ชัน `collect_one_coin`, pg_cron, Realtime (ดูข้อ 8) |
 | `supabase/migrations/20261126_coin_collector_v2.sql` | เด็กเก็บเหรียญ v2: ตาราง config (20 วินาที / เก็บทุกครั้ง), cron ทุก 10 วินาที (ดูข้อ 8) |
 | `supabase/migrations/20261127_lucky_draw.sql` | เจ้าแม่คงคาประกาศผู้โชคดี: ตาราง config/ผล, run_lucky_draw, get_lucky_draw_state, cron, Realtime (ดูข้อ 9) |
+| `supabase/migrations/20261128_lucky_draw_threshold.sql` | เจ้าแม่คงคา v2: จับเมื่อครบ 12 ใบ (trigger + cron), ค้าง 120 วินาที, draw_id (ดูข้อ 9) |
 | `supabase/tests/lucky_draw_test.sql` | ทดสอบการจับผู้โชคดีแบบจำลองเวลา (รันใน SQL Editor) |
 | `supabase/tests/coin_collector_test.sql` | ทดสอบกติกาเก็บเหรียญแบบจำลองเวลา (รันใน SQL Editor) |
 | `scripts/test-supabase.mjs` | ทดสอบ schema + RLS ด้วย anon key (`npm run test:supabase`) |
@@ -206,15 +207,19 @@ delete from public.krathongs where name like 'ทดสอบ%';
 - เปลี่ยนโอกาส/อายุขั้นต่ำ/cooldown (มีผลทันที ไม่ต้องรัน migration ใหม่):
   `update public.coin_collector_config set chance = 0.8, min_age = interval '30 seconds', cooldown = interval '30 seconds';`
   (cooldown ต่ำสุด 5 วินาที = ความยาวแอนิเมชัน / ถ้าปรับ cooldown ให้เป็นเลขที่หารด้วยรอบ cron 10 วินาทีลงตัว)
-- หยุดชั่วคราว: `select cron.unschedule('collect-one-coin');` (เปิดใหม่: รัน migration v2 อีกครั้ง)
+- หยุดชั่วคราว (รันซ้ำได้ ไม่ error ถ้าหยุดไปแล้ว): `select cron.unschedule(jobid) from cron.job where jobname = 'collect-one-coin';`
+  เปิดใหม่: `select cron.schedule('collect-one-coin', '10 seconds', $$select public.collect_one_coin()$$);`
+  เช็คว่างานยังอยู่: `select jobname, schedule, active from cron.job;`
+  (อย่าใช้ `cron.unschedule('ชื่องาน')` ตรงๆ — ถ้างานถูกหยุดไปแล้วจะ error "could not find valid entry for job"
+  และถ้ารันรวมกับคำสั่งอื่นในหน้าเดียว SQL Editor จะยกเลิกทั้งชุด)
 - คืนเหรียญทั้งหมด (เช่น หลังทดสอบ): `update public.krathongs set coin_collected_at = null;`
 
 ---
 
 ## 9) เจ้าแม่คงคาประกาศผู้โชคดี (Lucky Draw)
 
-เจ้าแม่คงคาผุดขึ้นกลางแม่น้ำ เลือกกระทง 1 ใบ แล้วประกาศชื่อผู้โชคดี ค้างบนจอ ~5 นาทีแล้วจางหาย
-**จับครั้งเดียวตลอดไป ผู้โชคดี 1 คน** ตัดสินที่ server (pg_cron) ทุกเครื่องเห็นช่วงเวลาเดียวกัน (คิดจากเวลา server)
+เจ้าแม่คงคาผุดขึ้นกลางแม่น้ำ เลือกกระทง 1 ใบ แล้วประกาศชื่อผู้โชคดี ค้างบนจอ 2 นาทีแล้วจางหาย
+**จับครั้งเดียวตลอดไป ผู้โชคดี 1 คน** ตัดสินที่ server ทุกเครื่องเห็นช่วงเวลาเดียวกัน (คิดจากเวลา server)
 รางวัลแจกที่งานออฟไลน์ (เว็บไม่ติดต่อผู้ชนะ)
 
 > ⚠️ **ห้ามเปิด `enabled` บน database จริงระหว่างทดสอบแล้วทิ้งไว้** ไม่งั้นสิทธิ์จับครั้งเดียวจะถูกใช้ไป
@@ -224,8 +229,12 @@ delete from public.krathongs where name like 'ทดสอบ%';
 
 กติกา
 
-- เมื่อมี **กระทงใบแรกที่สร้างหลังเปิดกิจกรรม** และผ่านไป `delay_seconds` (120 วินาที) → จับ 1 ครั้ง
-  สุ่ม 1 ใบจากกระทงทั้งหมดที่สร้างหลังเปิดกิจกรรม ณ ตอนจับ (กระทงล่องหนก็มีสิทธิ์)
+- เมื่อกระทงที่ **สร้างหลังเปิดกิจกรรม** (`created_at >= enabled_at`) ครบ `draw_threshold` ใบ (12) → จับทันที
+  สุ่ม 1 ใบจากกระทงทั้งหมดที่นับได้ ณ ตอนนั้น (ปกติคือ 12 ใบ / กระทงล่องหนก็มีสิทธิ์)
+- **กระทงที่สร้างก่อนเปิดกิจกรรมไม่นับ**
+- จับทันทีที่ใบที่ครบถูกบันทึก (trigger บนตาราง `krathongs`) + pg_cron ทุก 10 วินาทีเป็นตัวสำรอง
+  (ถ้าใบที่ 11 กับ 12 ถูกบันทึกพร้อมกันพอดี ต่างฝ่ายนับได้ไม่ครบ → cron จับให้ภายใน 10 วินาที)
+- การจับผิดพลาดไม่ทำให้การบันทึกกระทงล้มเหลว (trigger ครอบด้วย exception handler)
 - จับแล้วไม่จับอีก: database บังคับให้ `lucky_draws` มีได้แค่ 1 แถว (ใส่แถวที่สองจะถูกปฏิเสธ)
 - ค่าตั้งอยู่ในตาราง `public.lucky_draw_config` (แถวเดียว id = 1)
 
@@ -233,23 +242,41 @@ delete from public.krathongs where name like 'ทดสอบ%';
 | --- | --- | --- |
 | `enabled` | false | เปิดกิจกรรมหรือยัง |
 | `enabled_at` | - | เวลาเปิดกิจกรรม (นับเฉพาะกระทงที่สร้างหลังเวลานี้) |
-| `delay_seconds` | 120 | จับหลังกระทงใบแรกของกิจกรรมกี่วินาที |
-| `hold_seconds` | 300 | เจ้าแม่ค้างบนจอกี่วินาที (ไม่รวมช่วงผุด 7 วินาทีและจางหาย 4 วินาที) |
+| `draw_threshold` | 12 | จับเมื่อกระทงของกิจกรรมครบกี่ใบ |
+| `hold_seconds` | 120 | เจ้าแม่ค้างบนจอกี่วินาที (ไม่รวมช่วงโผล่ 9 วินาทีและจางหาย 4 วินาที — รวม ~133 วินาที) |
+| `delay_seconds` | 120 | เลิกใช้แล้ว (เก็บคอลัมน์ไว้เฉยๆ) |
 
 - ผู้ใช้เว็บอ่านได้อย่างเดียวผ่าน `get_lucky_draw_state()` (ไม่มีคำอธิษฐานของผู้ชนะ) — สั่งจับ/แก้ผล/อ่านค่าตั้งไม่ได้
+
+หน้าเว็บ
+
+- ช่วงโผล่ 9 วินาที (รอกระทงใบล่าสุดตกลงน้ำ 2 → แสงขึ้น 2 → เจ้าแม่ผุด 3.5 → กระทงลอยมา 1.5) → ค้าง 120 วินาที → จางหาย 4 วินาที
+- **แตะ/คลิกที่ใดก็ได้ หรือกด Esc = ปิด** (เฉพาะเครื่องนั้น คลิกที่ใช้ปิดไม่ทะลุไปโดนปุ่มข้างล่าง)
+  จำไว้ในเบราว์เซอร์ผูกกับรอบการจับ รีเฟรชแล้วไม่เด้งกลับ
+- **ไอคอนเจ้าแม่ (มุมขวาบน)** แสดงตั้งแต่มีผู้โชคดี กดเปิด/ปิดได้
+  ระหว่างเหตุการณ์: เห็นช่วงเดียวกับทุกคน / หลังจบ: ดูซ้ำท่าค้าง ค้างไว้จนกว่าจะแตะ/กดปิด
 
 ### 9.1 ติดตั้ง
 
 1. ต้องเปิด pg_cron แล้ว (ข้อ 8.1)
-2. SQL Editor > รัน `supabase/migrations/20261127_lucky_draw.sql` (รันซ้ำได้ ไม่เปิดกิจกรรมเอง)
+2. SQL Editor > รันตามลำดับ (รันซ้ำได้ ไม่เปิดกิจกรรมเอง):
+   1. `supabase/migrations/20261127_lucky_draw.sql`
+   2. `supabase/migrations/20261128_lucky_draw_threshold.sql` (จับเมื่อครบ 12 ใบ, ค้าง 120 วินาที, trigger)
 3. เช็ค: Integrations > Cron ต้องเห็นงาน `run-lucky-draw` รอบ `10 seconds`
    และ Database > Publications > `supabase_realtime` ต้องมีตาราง `lucky_draws`
 
-### 9.2 ทดสอบ (ไม่ใช้สิทธิ์จับจริง)
+### 9.2 ทดสอบ
 
-- รัน `supabase/tests/lucky_draw_test.sql` ใน SQL Editor → ขึ้น `ERROR: TEST REPORT ...` โดยตั้งใจ ทุกบรรทัดต้อง `PASS` และจบด้วย `ALL PASSED`
-  (จำลองเวลาและย้อนกลับทั้งหมด ไม่เปิดกิจกรรมจริง)
+- **ไม่ใช้สิทธิ์จับจริง:** รัน `supabase/tests/lucky_draw_test.sql` ใน SQL Editor → ขึ้น `ERROR: TEST REPORT ...` โดยตั้งใจ
+  ทุกบรรทัดต้อง `PASS` และจบด้วย `ALL PASSED` (ย้อนกลับทั้งหมด ไม่เปิดกิจกรรมจริง)
 - `npm run test:supabase` หัวข้อ 4c: anon อ่านสถานะได้ แต่สั่งจับ/เขียนผล/อ่านค่าตั้งไม่ได้
+- **ทดสอบจริงด้วยจำนวนน้อย** (ใช้สิทธิ์จับ ต้องรีเซ็ตตามข้อ 9.4 หลังทดสอบเสมอ):
+  ```sql
+  delete from public.lucky_draws;
+  update public.lucky_draw_config set enabled = true, enabled_at = now(), draw_threshold = 3 where id = 1;
+  ```
+  สร้างกระทงชื่อขึ้นต้นด้วย "ทดสอบ" 3 ใบ → ใบที่ 3 เจ้าแม่ปรากฏ (หลัง lead-in 2 วินาที)
+  **อย่าลืมตั้ง `draw_threshold` กลับเป็น 12 ก่อนวันงาน** (คำสั่งรีเซ็ตข้อ 9.4 ตั้งให้แล้ว)
 
 ### 9.3 เปิดกิจกรรมจริง (วันงาน)
 
@@ -258,16 +285,18 @@ delete from public.lucky_draws;
 update public.lucky_draw_config set enabled = true, enabled_at = now() where id = 1;
 ```
 
-นับจากนี้ กระทงใบแรกที่มีคนสร้าง + 2 นาที = เจ้าแม่ผุดประกาศผู้โชคดีบนทุกจอ
+นับจากนี้ กระทงใบที่ 12 ที่มีคนสร้าง = เจ้าแม่ผุดประกาศผู้โชคดีบนทุกจอ (หลังเปิดแล้ว ห้ามสร้างกระทงทดสอบ — นับและมีสิทธิ์ชนะ)
 ดูผล: `select k.name, d.drawn_at from public.lucky_draws d join public.krathongs k on k.id = d.krathong_id;`
 
-ปรับเวลา (ทำก่อนเปิดกิจกรรม): `update public.lucky_draw_config set delay_seconds = 300, hold_seconds = 600 where id = 1;`
+ปรับค่า (ทำก่อนเปิดกิจกรรม): `update public.lucky_draw_config set draw_threshold = 20, hold_seconds = 180 where id = 1;`
 
 ### 9.4 รีเซ็ตหลังทดสอบ
 
 ```sql
 delete from public.lucky_draws;                                              -- ลบผลก่อน (กระทงผู้ชนะลบไม่ได้ถ้ายังมีผลอยู่)
-update public.lucky_draw_config set enabled = false, enabled_at = null where id = 1;
+update public.lucky_draw_config
+  set enabled = false, enabled_at = null, draw_threshold = 12, hold_seconds = 120
+where id = 1;
 delete from public.krathongs where name like 'ทดสอบ%';                        -- ลบกระทงทดสอบ
 ```
 

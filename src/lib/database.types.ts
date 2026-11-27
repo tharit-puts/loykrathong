@@ -5,7 +5,7 @@
 
 /** ค่าที่ CHECK constraint ในตาราง krathongs ยอมรับ */
 export type DbKrathongType = 'banana_leaf' | 'ice' | 'bread' | 'invisible';
-export type DbDecoration = 'flowers' | 'coin10' | 'nail';
+export type DbDecoration = 'flowers' | 'coin10' | 'nail' | 'khao_tok';
 
 export interface Database {
   public: {
@@ -65,6 +65,8 @@ export interface Database {
 export interface LuckyDrawStateJson {
   server_now: string;
   hold_seconds: number;
+  /** id ของการจับ (null ถ้ายังไม่จับ) */
+  draw_id: string | null;
   drawn_at: string | null;
   krathong: {
     id: string;

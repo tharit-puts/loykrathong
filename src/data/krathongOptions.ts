@@ -20,4 +20,5 @@ export const DECORATION_OPTIONS: Option<Decoration>[] = [
   { id: 'flowers', label: 'ดอกไม้รวม' },
   { id: 'coin', label: 'เหรียญ 10', note: 'โชคลาภและความมั่งคั่ง' },
   { id: 'nail', label: 'เล็บ', note: 'ตัดสิ่งไม่ดี เคราะห์ร้าย และความทุกข์ออกจากตัว' },
+  { id: 'rice', label: 'ข้าวตอก', note: 'ให้ชีวิตมั่นคงมีการงานที่ดี' },
 ];

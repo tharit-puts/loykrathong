@@ -288,7 +288,7 @@ export default function CreateKrathongWizard({ open, onClose, onSubmit }: Props)
                 />
                 <fieldset className="min-w-0">
                   <legend className="sr-only">ของตกแต่ง</legend>
-                  <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pt-1 pb-2 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0">
+                  <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pt-1 pb-2 md:mx-0 md:grid md:grid-cols-3 md:gap-3 md:overflow-visible md:px-0 lg:grid-cols-5">
                     {/* ธูปเทียน: มีบนกระทงทุกใบ ติ๊กไว้ตลอด กดเอาออกไม่ได้ */}
                     <OptionCard
                       kind="checkbox"

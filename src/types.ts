@@ -1,7 +1,7 @@
 export type KrathongType = 'leaf' | 'ice' | 'bread' | 'invisible';
 
 /** ของตกแต่งที่เลือกเพิ่มได้ (ธูปเทียนมีบนกระทงทุกใบอยู่แล้ว ไม่ต้องเก็บ) */
-export type Decoration = 'flowers' | 'coin' | 'nail';
+export type Decoration = 'flowers' | 'coin' | 'nail' | 'rice';
 
 /** แถวบนแม่น้ำ: 0 = บน (คลื่นชั้นหลัง), 1 = กลาง, 2 = ล่าง (คลื่นชั้นหน้า) */
 export type Lane = 0 | 1 | 2;

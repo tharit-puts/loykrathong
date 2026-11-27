@@ -5,7 +5,7 @@ import RiverGoddess from './RiverGoddess';
 import KrathongIcon from './KrathongIcon';
 import { LAYERS, WaveLayer } from './RiverWaves';
 import { LANE_WATERLINE, MAX_VISIBLE, lanePath, laneOf, pathPos, xOf } from '../lib/riverLayout';
-import type { LuckyDrawView } from '../hooks/useLuckyDraw';
+import type { GoddessScene } from '../hooks/useLuckyDraw';
 import type { Krathong, Lane } from '../types';
 
 interface Props {
@@ -17,8 +17,10 @@ interface Props {
   onSceneBottom?: (y: number) => void;
   /** กระทงที่เด็กกำลังมาเก็บเหรียญ (null = ไม่มี) */
   collectingId?: string | null;
-  /** เจ้าแม่คงคาประกาศผู้โชคดี (null = ไม่มีเหตุการณ์ตอนนี้) */
-  luckyDraw?: LuckyDrawView | null;
+  /** เจ้าแม่คงคาประกาศผู้โชคดี (null = ไม่แสดงตอนนี้) */
+  goddess?: GoddessScene | null;
+  onGoddessDismiss?: () => void;
+  onGoddessClosed?: () => void;
   onKidBend?: (id: string) => void;
   onKidFinish?: (id: string) => void;
 }
@@ -96,7 +98,9 @@ export default function River({
   collectingId = null,
   onKidBend,
   onKidFinish,
-  luckyDraw = null,
+  goddess = null,
+  onGoddessDismiss,
+  onGoddessClosed,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const onSceneBottomRef = useRef(onSceneBottom);
@@ -263,15 +267,18 @@ export default function River({
          * เจ้าแม่คงคา: ชั้นบนสุดของแม่น้ำ เหนือกระทง สะพาน ป้ายชื่อ เด็กเก็บเหรียญ (และปุ่ม/ตัวนับด้านบนที่อยู่ก่อนใน DOM)
          * modal และแจ้งเตือนอยู่ใน top layer จึงอยู่เหนือเจ้าแม่เสมอ / ฐานคลื่นของภาพอยู่ที่ผิวน้ำแถวกลาง
          */}
-        {box && luckyDraw && (
+        {box && goddess && (
           <RiverGoddess
-            key={`goddess-${luckyDraw.winner.id}-${luckyDraw.epoch}-${box.w}x${box.h}`}
-            winner={luckyDraw.winner}
-            drawnAtLocal={luckyDraw.drawnAtLocal}
-            holdSeconds={luckyDraw.holdSeconds}
+            key={`goddess-${goddess.key}-${box.w}x${box.h}`}
+            winner={goddess.winner}
+            drawnAtLocal={goddess.drawnAtLocal}
+            holdSeconds={goddess.holdSeconds}
             riverW={box.w}
             riverTop={box.top}
             waterY={laneWaterY(box, 1)}
+            closing={goddess.closing}
+            onDismiss={() => onGoddessDismiss?.()}
+            onClosed={() => onGoddessClosed?.()}
           />
         )}
 
